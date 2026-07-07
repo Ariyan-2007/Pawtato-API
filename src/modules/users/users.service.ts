@@ -20,7 +20,7 @@ export class UsersService {
     private readonly userModel: Model<UserDocument>,
   ) {}
 
-  async create(createUserDto: CreateUserDto) {
+  async createUser(createUserDto: CreateUserDto) {
     const existingUser = await this.userModel.findOne({
       email: createUserDto.email,
     });
