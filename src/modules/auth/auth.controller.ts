@@ -3,12 +3,15 @@ import {
   Controller,
   Post,
 } from '@nestjs/common';
-
 import { AuthService } from './auth.service';
-
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
+import { Get, UseGuards } from '@nestjs/common';
+import { JwtAuthGuard } from './guards/jwt-auth.guard';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 
+@ApiTags('Authentication')
 @Controller('auth')
 export class AuthController {
   constructor(
@@ -28,4 +31,11 @@ export class AuthController {
   ) {
     return this.authService.login(loginDto);
   }
+  @ApiBearerAuth('JWT-auth')
+  @UseGuards(JwtAuthGuard)
+  @Get('me')
+  me(@CurrentUser() user: any) {
+    return user;
+  }
 }
+
