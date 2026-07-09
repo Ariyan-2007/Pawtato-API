@@ -27,6 +27,12 @@ export class User {
     select: false,
   })
   password!: string;
+  @Prop({
+  default: null,
+  select: false,
+  })
+
+  refreshToken?: string;
 
   @Prop({
     default: UserRole.USER,
