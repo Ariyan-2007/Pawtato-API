@@ -12,6 +12,7 @@ import * as bcrypt from 'bcrypt';
 import { User, UserDocument } from './schemas/user.schema';
 
 import { CreateUserDto } from './dto/create-user.dto';
+import { UpdateProfileDto } from './dto/update-profile.dto';
 
 @Injectable()
 export class UsersService {
@@ -71,4 +72,21 @@ export class UsersService {
     },
   );
   }
+  async getProfile(userId: string) {
+  return this.userModel.findById(userId)
+     .select('-password');
+}
+
+async updateProfile(
+  userId: string,
+  updateProfileDto: UpdateProfileDto,
+) {
+  return this.userModel.findByIdAndUpdate(
+    userId,
+    updateProfileDto,
+    {
+      new: true,
+    },
+  ).select('-password');
+}
 }
