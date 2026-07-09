@@ -22,6 +22,7 @@ describe('AppController (e2e)', () => {
       .expect(200)
       .expect(
         'Hello World! Ariyan has entered the development. We shall start soon. Best Of Luck',
-      );
+      )
+      .expect('Hello From Safar');
   });
 });
