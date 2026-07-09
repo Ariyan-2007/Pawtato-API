@@ -24,6 +24,15 @@ async function bootstrap() {
     .setTitle('Pawtato API')
     .setDescription('Digital Identity Platform for Pets')
     .setVersion('1.0')
+    .addBearerAuth(
+    {
+      type: 'http',
+      scheme: 'bearer',
+      bearerFormat: 'JWT',
+      in: 'header',
+    },
+    'JWT-auth',
+  )
     .build();
 
   const document = SwaggerModule.createDocument(app, swaggerConfig);
