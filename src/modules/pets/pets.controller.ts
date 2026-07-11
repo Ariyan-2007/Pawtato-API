@@ -1,8 +1,10 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
+  Patch,
   Post,
   UseGuards,
 } from '@nestjs/common';
@@ -21,7 +23,7 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import type { JwtPayload } from '../auth/interfaces/jwt-payload.interface';
 
 import { CreatePetDto } from './dto/create-pet.dto';
-
+import { UpdatePetDto } from './dto/update-pet.dto';
 
 @ApiTags('Pets')
 @ApiBearerAuth('JWT-auth')
@@ -57,6 +59,35 @@ export class PetsController {
   petId: string,
   ) {
   return this.petsService.findOne(
+    user.sub,
+    petId,
+  );
+
+ }
+ @Patch(':id')
+ update(
+  @CurrentUser() user: JwtPayload,
+
+  @Param('id')
+  petId: string,
+
+  @Body()
+  updatePetDto: UpdatePetDto,
+ ) {
+  return this.petsService.update(
+    user.sub,
+    petId,
+    updatePetDto,
+  );
+ }
+ @Delete(':id')
+remove(
+  @CurrentUser() user: JwtPayload,
+
+  @Param('id')
+  petId: string,
+) {
+  return this.petsService.remove(
     user.sub,
     petId,
   );

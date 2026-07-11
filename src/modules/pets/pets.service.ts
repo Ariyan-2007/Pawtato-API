@@ -4,6 +4,7 @@ import { Model, Types } from 'mongoose';
 import { Pet, PetDocument } from './schemas/pet.schema';
 import { CreatePetDto } from './dto/create-pet.dto';
 import { NotFoundException } from '@nestjs/common';
+import { UpdatePetDto } from './dto/update-pet.dto';
 
 @Injectable()
 export class PetsService {
@@ -45,9 +46,48 @@ export class PetsService {
     if (!pet) {
     throw new NotFoundException(
       'Pet not found',
-     );
+      );
+    }
+
+    return pet;
+     }
+    async update(
+    ownerId: string,
+    petId: string,
+    updatePetDto: UpdatePetDto,
+      ) {
+     const pet = await this.petModel.findOneAndUpdate(
+     {
+      _id: petId,
+      owner: new Types.ObjectId(ownerId),
+     },
+     updatePetDto,
+     {
+      new: true,
+      },
+    );
+
+     if (!pet) {
+     throw new NotFoundException('Pet not found');}
+
+      return pet;
+      }
+    async remove(
+     ownerId: string,
+     petId: string,
+     ) {
+     const pet = await this.petModel.findOneAndDelete({
+     _id: petId,
+     owner: new Types.ObjectId(ownerId),
+  });
+
+  if (!pet) {
+    throw new NotFoundException('Pet not found');
   }
 
-  return pet;
+  return {
+    message: 'Pet deleted successfully',
+  };
 }
+
 }
