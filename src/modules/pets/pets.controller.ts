@@ -1,6 +1,8 @@
 import {
   Body,
   Controller,
+  Get,
+  Param,
   Post,
   UseGuards,
 } from '@nestjs/common';
@@ -20,6 +22,7 @@ import type { JwtPayload } from '../auth/interfaces/jwt-payload.interface';
 
 import { CreatePetDto } from './dto/create-pet.dto';
 
+
 @ApiTags('Pets')
 @ApiBearerAuth('JWT-auth')
 @UseGuards(JwtAuthGuard)
@@ -28,6 +31,13 @@ export class PetsController {
   constructor(
     private readonly petsService: PetsService,
   ) {}
+
+  @Get()
+  findAll(
+  @CurrentUser() user: JwtPayload,
+   ) {
+  return this.petsService.findAll(user.sub);
+  }
 
   @Post()
   create(
@@ -39,4 +49,16 @@ export class PetsController {
       createPetDto,
     );
   }
+  @Get(':id')
+ findOne(
+  @CurrentUser() user: JwtPayload,
+
+  @Param('id')
+  petId: string,
+  ) {
+  return this.petsService.findOne(
+    user.sub,
+    petId,
+  );
+}
 }
