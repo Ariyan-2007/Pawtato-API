@@ -88,5 +88,20 @@ async updateProfile(
       new: true,
     },
   ).select('-password');
-}
+  }
+
+  async updateAvatar(
+  userId: string,
+  avatar: string,
+) {
+  return this.userModel.findByIdAndUpdate(
+    userId,
+     {
+      avatar,
+     },
+     {
+      new: true,
+     },
+     );
+  }
 }
