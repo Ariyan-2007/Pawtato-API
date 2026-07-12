@@ -13,6 +13,11 @@ export class Pet {
     required: true,
   })
   owner!: Types.ObjectId;
+  @Prop({
+   unique: true,
+   index: true,
+   })
+  publicId!: string;
 
   @Prop({
     required: true,
@@ -60,6 +65,7 @@ export class Pet {
     default: false,
   })
   isLost!: boolean;
+  
 }
 
 export const PetSchema = SchemaFactory.createForClass(Pet);

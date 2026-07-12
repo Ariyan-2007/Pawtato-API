@@ -5,6 +5,7 @@ import { Pet, PetDocument } from './schemas/pet.schema';
 import { CreatePetDto } from './dto/create-pet.dto';
 import { NotFoundException } from '@nestjs/common';
 import { UpdatePetDto } from './dto/update-pet.dto';
+import { nanoid } from 'nanoid';
 
 @Injectable()
 export class PetsService {
@@ -20,6 +21,7 @@ export class PetsService {
     const pet = await this.petModel.create({
       ...createPetDto,
       owner: new Types.ObjectId(ownerId),
+      publicId: nanoid(10),
     });
 
     return pet;
