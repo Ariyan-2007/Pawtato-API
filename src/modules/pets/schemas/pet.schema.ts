@@ -65,6 +65,13 @@ export class Pet {
     default: false,
   })
   isLost!: boolean;
+  @Prop({
+    default: 0,
+   })
+  scanCount!: number;
+
+   @Prop()
+  lastScannedAt?: Date;
   
 }
 

@@ -19,9 +19,20 @@ export class PublicService {
   async getPetProfile(
     publicId: string,
   ) {
-    const pet = await this.petModel.findOne({
-      publicId,
-    });
+    const pet = await this.petModel.findOneAndUpdate(
+    {
+    publicId,
+    },
+    {
+    $inc: {
+      scanCount: 1,
+     },
+    lastScannedAt: new Date(),
+   },
+    {
+    new: true,
+    },
+  );
 
     if (!pet) {
       throw new NotFoundException(
