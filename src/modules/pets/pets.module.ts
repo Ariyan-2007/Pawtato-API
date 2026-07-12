@@ -15,7 +15,14 @@ import { Pet, PetSchema } from './schemas/pet.schema';
       },
     ]),
   ],
+
   controllers: [PetsController],
+
   providers: [PetsService],
+
+  exports: [
+    MongooseModule,
+    PetsService,
+  ],
 })
 export class PetsModule {}

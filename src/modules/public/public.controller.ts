@@ -1,4 +1,33 @@
-import { Controller } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Param,
+} from '@nestjs/common';
 
+import {
+  ApiOperation,
+  ApiTags,
+} from '@nestjs/swagger';
+
+import { PublicService } from './public.service';
+
+@ApiTags('Public')
 @Controller('public')
-export class PublicController {}
+export class PublicController {
+  constructor(
+    private readonly publicService: PublicService,
+  ) {}
+
+  @ApiOperation({
+    summary: 'Get public pet profile',
+  })
+  @Get('pets/:publicId')
+  getPetProfile(
+    @Param('publicId')
+    publicId: string,
+  ) {
+    return this.publicService.getPetProfile(
+      publicId,
+    );
+  }
+}
