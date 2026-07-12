@@ -8,6 +8,9 @@ import { AuthModule } from './modules/auth/auth.module';
 import { UsersModule } from './modules/users/users.module';
 import { PetsModule } from './modules/pets/pets.module';
 import { PublicModule } from './modules/public/public.module';
+import { QrModule } from './modules/qr/qr.module';
+import { ServeStaticModule } from '@nestjs/serve-static';
+import { join } from 'path';
 
 
 @Module({
@@ -16,6 +19,10 @@ import { PublicModule } from './modules/public/public.module';
       isGlobal: true,
       load: [configuration],
       envFilePath: '.env',
+    }),
+    ServeStaticModule.forRoot({
+     rootPath: join(process.cwd(), 'uploads'),
+     serveRoot: '/uploads',
     }),
 
     DatabaseModule,
@@ -29,6 +36,8 @@ import { PublicModule } from './modules/public/public.module';
     PetsModule,
 
     PublicModule,
+
+    QrModule,
   ],
 })
 export class AppModule {}
