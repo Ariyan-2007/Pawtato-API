@@ -1,9 +1,9 @@
 import {
   Body,
   Controller,
+  Get,
   Param,
   Post,
-  Get,
   UseGuards,
 } from '@nestjs/common';
 
@@ -11,19 +11,21 @@ import {
   ApiBearerAuth,
   ApiTags,
 } from '@nestjs/swagger';
+
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import type { JwtPayload } from '../auth/interfaces/jwt-payload.interface';
-import { MedicalService } from './medical.service';
-import { CreateMedicalRecordDto } from './dto/create-medical-record.dto';
 
-@ApiTags('Medical Records')
+import { VaccinationsService } from './vaccinations.service';
+import { CreateVaccinationDto } from './dto/create-vaccination.dto';
+
+@ApiTags('Vaccinations')
 @ApiBearerAuth('JWT-auth')
 @UseGuards(JwtAuthGuard)
-@Controller('pets/:petId/medical-records')
-export class MedicalController {
+@Controller('pets/:petId/vaccinations')
+export class VaccinationsController {
   constructor(
-    private readonly medicalService: MedicalService,
+    private readonly vaccinationsService: VaccinationsService,
   ) {}
 
   @Post()
@@ -34,25 +36,25 @@ export class MedicalController {
     petId: string,
 
     @Body()
-    dto: CreateMedicalRecordDto,
+    dto: CreateVaccinationDto,
   ) {
-    return this.medicalService.create(
+    return this.vaccinationsService.create(
       user.sub,
       petId,
       dto,
     );
-    }
+  }
 
-    @Get()
-    findAll(
-     @CurrentUser() user: JwtPayload,
+  @Get()
+  findAll(
+    @CurrentUser() user: JwtPayload,
 
-     @Param('petId')
-     petId: string,
-    ) {
-  return this.medicalService.findAll(
-    user.sub,
-    petId,
-  );
-} 
+    @Param('petId')
+    petId: string,
+  ) {
+    return this.vaccinationsService.findAll(
+      user.sub,
+      petId,
+    );
+  }
 }

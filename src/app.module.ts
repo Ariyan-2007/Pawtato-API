@@ -12,6 +12,8 @@ import { QrModule } from './modules/qr/qr.module';
 import { ServeStaticModule } from '@nestjs/serve-static';
 import { join } from 'path';
 import { MedicalModule } from './modules/medical/medical.module';
+import { VaccinationsModule } from './modules/vaccinations/vaccinations.module';
+import { NotificationsModule } from './modules/notifications/notifications.module';
 
 
 @Module({
@@ -41,6 +43,10 @@ import { MedicalModule } from './modules/medical/medical.module';
     QrModule,
 
     MedicalModule,
+
+    VaccinationsModule,
+
+    NotificationsModule,
   ],
 })
 export class AppModule {}

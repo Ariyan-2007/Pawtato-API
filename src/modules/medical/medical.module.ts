@@ -9,8 +9,12 @@ import {
   MedicalRecordSchema,
 } from './schemas/medical-record.schema';
 
+import { PetsModule } from '../pets/pets.module';
+
 @Module({
   imports: [
+    PetsModule,
+
     MongooseModule.forFeature([
       {
         name: MedicalRecord.name,

@@ -181,10 +181,27 @@ export class PetsService {
     }),
   ]);
 
-  return {
-    totalPets,
-    lostPets,
-    foundPets,
-  };
-}
+   return {
+     totalPets,
+     lostPets,
+     foundPets,
+    };
+  }
+  async findOwnedPet(
+  ownerId: string,
+  petId: string,
+) {
+  const pet = await this.petModel.findOne({
+    _id: petId,
+    owner: new Types.ObjectId(ownerId),
+  });
+
+  if (!pet) {
+    throw new NotFoundException(
+      'Pet not found',
+    );
+  }
+
+  return pet;
+ }
 }
