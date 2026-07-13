@@ -13,17 +13,13 @@ import {
   ApiBearerAuth,
   ApiTags,
 } from '@nestjs/swagger';
-
 import { PetsService } from './pets.service';
-
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
-
 import type { JwtPayload } from '../auth/interfaces/jwt-payload.interface';
-
 import { CreatePetDto } from './dto/create-pet.dto';
 import { UpdatePetDto } from './dto/update-pet.dto';
+import { ReportLostDto } from './dto/report-lost.dto';
 
 @ApiTags('Pets')
 @ApiBearerAuth('JWT-auth')
@@ -81,15 +77,31 @@ export class PetsController {
   );
  }
  @Delete(':id')
-remove(
-  @CurrentUser() user: JwtPayload,
+  remove(
+   @CurrentUser() user: JwtPayload,
 
-  @Param('id')
-  petId: string,
-) {
+   @Param('id')
+   petId: string,
+  ) {
   return this.petsService.remove(
     user.sub,
     petId,
   );
-}
+ }
+ @Patch(':id/report-lost')
+  reportLost(
+   @CurrentUser() user: JwtPayload,
+
+   @Param('id')
+   petId: string,
+
+   @Body()
+   dto: ReportLostDto,
+  ) {
+  return this.petsService.reportLost(
+    user.sub,
+    petId,
+    dto,
+  );
+ }
 }

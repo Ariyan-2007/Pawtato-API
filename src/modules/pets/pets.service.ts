@@ -2,19 +2,14 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-
 import { InjectModel } from '@nestjs/mongoose';
-
 import { Model, Types } from 'mongoose';
-
 import { nanoid } from 'nanoid';
-
 import { Pet, PetDocument } from './schemas/pet.schema';
-
 import { CreatePetDto } from './dto/create-pet.dto';
 import { UpdatePetDto } from './dto/update-pet.dto';
-
 import { QrService } from '../qr/qr.service';
+import { ReportLostDto } from './dto/report-lost.dto';
 
 @Injectable()
 export class PetsService {
@@ -109,4 +104,33 @@ export class PetsService {
       message: 'Pet deleted successfully',
     };
   }
+
+  async reportLost(
+  ownerId: string,
+  petId: string,
+  dto: ReportLostDto,
+ ) {
+  const pet = await this.petModel.findOneAndUpdate(
+    {
+      _id: petId,
+      owner: new Types.ObjectId(ownerId),
+    },
+    {
+      ...dto,
+      isLost: true,
+      lostDate: new Date(),
+    },
+    {
+      new: true,
+    },
+  );
+
+  if (!pet) {
+    throw new NotFoundException(
+      'Pet not found',
+    );
+  }
+
+  return pet;
+ }
 }

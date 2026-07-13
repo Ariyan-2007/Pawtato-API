@@ -63,8 +63,26 @@ export class Pet {
 
   @Prop({
     default: false,
-  })
+   })
   isLost!: boolean;
+
+  @Prop()
+  lostDate?: Date;
+
+  @Prop()
+  lastSeenLocation?: string;
+
+  @Prop()
+  lostDescription?: string;
+
+  @Prop()
+  reward?: number;
+
+  @Prop()
+  emergencyContact?: string;
+
+
+
   @Prop({
     default: 0,
    })
