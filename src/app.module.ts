@@ -11,6 +11,7 @@ import { PublicModule } from './modules/public/public.module';
 import { QrModule } from './modules/qr/qr.module';
 import { ServeStaticModule } from '@nestjs/serve-static';
 import { join } from 'path';
+import { MedicalModule } from './modules/medical/medical.module';
 
 
 @Module({
@@ -38,6 +39,8 @@ import { join } from 'path';
     PublicModule,
 
     QrModule,
+
+    MedicalModule,
   ],
 })
 export class AppModule {}
