@@ -30,4 +30,8 @@ export class PublicController {
       publicId,
     );
   }
+  @Get('lost-pets')
+  getLostPets() {
+  return this.publicService.getLostPets();
+}
 }

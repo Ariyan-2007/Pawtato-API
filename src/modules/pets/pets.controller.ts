@@ -104,4 +104,28 @@ export class PetsController {
     dto,
   );
  }
+
+ @Patch(':id/report-found')
+reportFound(
+  @CurrentUser() user: JwtPayload,
+
+  @Param('id')
+  petId: string,
+) {
+  return this.petsService.reportFound(
+    user.sub,
+    petId,
+   );
+  }
+
+  @Get('statistics')
+getStatistics(
+  @CurrentUser() user: JwtPayload,
+) {
+  return this.petsService.getStatistics(
+    user.sub,
+  );
+}
+
+
 }

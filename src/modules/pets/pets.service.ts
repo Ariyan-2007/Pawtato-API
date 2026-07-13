@@ -105,20 +105,50 @@ export class PetsService {
     };
   }
 
-  async reportLost(
-  ownerId: string,
-  petId: string,
-  dto: ReportLostDto,
- ) {
-  const pet = await this.petModel.findOneAndUpdate(
+    async reportLost(
+    ownerId: string,
+    petId: string,
+    dto: ReportLostDto,
+   ) {
+    const pet = await this.petModel.findOneAndUpdate(
+      {
+      _id: petId,
+      owner: new Types.ObjectId(ownerId),
+     },
+     {
+      ...dto,
+      isLost: true,
+      lostDate: new Date(),
+     },
+     {
+      new: true,
+     },
+    );
+
+   if (!pet) {
+    throw new NotFoundException(
+      'Pet not found',
+    );
+  }
+
+    return pet;
+  }
+
+   async reportFound(
+   ownerId: string,
+   petId: string,
+   ) {
+   const pet = await this.petModel.findOneAndUpdate(
     {
       _id: petId,
       owner: new Types.ObjectId(ownerId),
     },
     {
-      ...dto,
-      isLost: true,
-      lostDate: new Date(),
+      isLost: false,
+      lostDate: undefined,
+      lastSeenLocation: undefined,
+      lostDescription: undefined,
+      reward: undefined,
     },
     {
       new: true,
@@ -126,11 +156,35 @@ export class PetsService {
   );
 
   if (!pet) {
-    throw new NotFoundException(
-      'Pet not found',
-    );
+    throw new NotFoundException('Pet not found');
   }
 
   return pet;
- }
+  }
+
+  async getStatistics(ownerId: string) {
+  const owner = new Types.ObjectId(ownerId);
+
+  const [
+    totalPets,
+    lostPets,
+    foundPets,
+  ] = await Promise.all([
+    this.petModel.countDocuments({ owner }),
+    this.petModel.countDocuments({
+      owner,
+      isLost: true,
+    }),
+    this.petModel.countDocuments({
+      owner,
+      isLost: false,
+    }),
+  ]);
+
+  return {
+    totalPets,
+    lostPets,
+    foundPets,
+  };
+}
 }

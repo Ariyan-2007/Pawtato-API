@@ -31,12 +31,13 @@ export class PublicService {
     },
   );
 
+  
+
     if (!pet) {
       throw new NotFoundException(
         'Pet not found',
       );
     }
-
     return {
       name: pet.name,
       species: pet.species,
@@ -52,4 +53,17 @@ export class PublicService {
       emergencyContact: pet.emergencyContact,
     };
   }
+
+  async getLostPets() {
+  return this.petModel
+    .find({
+      isLost: true,
+    })
+    .select(
+      'publicId name species breed profileImage lastSeenLocation reward lostDate',
+    )
+    .sort({
+      lostDate: -1,
+    });
+}
 }
