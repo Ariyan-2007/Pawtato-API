@@ -3,11 +3,14 @@ import { MailerModule } from '@nestjs-modules/mailer';
 
 import { NotificationsController } from './notifications.controller';
 import { NotificationsService } from './notifications.service';
-
 import { VaccinationReminderJob } from './jobs/vaccination-reminder.job';
+
+import { VaccinationsModule } from '../vaccinations/vaccinations.module';
 
 @Module({
   imports: [
+    VaccinationsModule,
+
     MailerModule.forRoot({
       transport: {
         host: process.env.MAIL_HOST,

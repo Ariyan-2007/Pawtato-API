@@ -14,6 +14,7 @@ import { join } from 'path';
 import { MedicalModule } from './modules/medical/medical.module';
 import { VaccinationsModule } from './modules/vaccinations/vaccinations.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
+import { AdminModule } from './modules/admin/admin.module';
 
 
 @Module({
@@ -47,6 +48,8 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
     VaccinationsModule,
 
     NotificationsModule,
+
+    AdminModule,
   ],
 })
 export class AppModule {}
