@@ -1,9 +1,5 @@
-import {
-  Injectable,
-} from '@nestjs/common';
-
+import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-
 import { Model } from 'mongoose';
 
 import {
@@ -29,10 +25,7 @@ export class MedicalService {
     petId: string,
     dto: CreateMedicalRecordDto,
   ) {
-    await this.petsService.findOwnedPet(
-      ownerId,
-      petId,
-    );
+    await this.petsService.findOwnedPet(ownerId, petId);
 
     return this.medicalModel.create({
       pet: petId,
@@ -41,21 +34,22 @@ export class MedicalService {
   }
 
   async findAll(
-  ownerId: string,
-  petId: string,
-) {
-  await this.petsService.findOwnedPet(
-    ownerId,
-    petId,
-  );
+    ownerId: string,
+    petId: string,
+  ) {
+    await this.petsService.findOwnedPet(ownerId, petId);
 
-  return this.medicalModel
-    .find({
-      pet: petId,
-    })
-    .sort({
-      visitDate: -1,
-      createdAt: -1,
-    });
-}
+    return this.medicalModel
+      .find({
+        pet: petId,
+      })
+      .sort({
+        visitDate: -1,
+        createdAt: -1,
+      });
+  }
+
+  async count(): Promise<number> {
+    return this.medicalModel.countDocuments();
+  }
 }

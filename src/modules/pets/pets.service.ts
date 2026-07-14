@@ -204,4 +204,22 @@ export class PetsService {
 
   return pet;
  }
+
+ async count(): Promise<number> {
+  return this.petModel.countDocuments();
+  }
+
+  async countLost(): Promise<number> {
+  return this.petModel.countDocuments({
+    isLost: true,
+  });
+ }
+
+ async countRecovered(): Promise<number> {
+  return this.petModel.countDocuments({
+    isLost: false,
+  });
+ }
+
+
 }

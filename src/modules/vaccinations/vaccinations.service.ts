@@ -53,4 +53,8 @@ export class VaccinationsService {
         nextDueDate: 1,
       });
   }
+
+  async count(): Promise<number> {
+  return this.vaccinationModel.countDocuments();
+ }
 }

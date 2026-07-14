@@ -104,4 +104,8 @@ async updateProfile(
      },
      );
   }
+
+  async count(): Promise<number> {
+  return this.userModel.countDocuments();
+  }
 }
