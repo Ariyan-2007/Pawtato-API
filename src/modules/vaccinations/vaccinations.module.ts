@@ -30,7 +30,9 @@ import { PetsModule } from '../pets/pets.module';
   providers: [
     VaccinationsService,
   ],
+
   exports: [
+    VaccinationsService,  
     MongooseModule,
   ],
 })

@@ -26,5 +26,10 @@ import { PetsModule } from '../pets/pets.module';
   controllers: [MedicalController],
 
   providers: [MedicalService],
+
+  exports: [
+    MedicalService,
+    MongooseModule,
+  ],
 })
 export class MedicalModule {}

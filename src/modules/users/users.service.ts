@@ -14,6 +14,7 @@ import { User, UserDocument } from './schemas/user.schema';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { UserRole } from '../../common/enums/user-role.enum';
+import { AdminUserQueryDto } from '../admin/dto/admin-user-query.dto';
 
 @Injectable()
 export class UsersService {
@@ -107,20 +108,71 @@ async updateProfile(
   return this.userModel.countDocuments();
   }
 
-  async findAll() {
-  return this.userModel
-    .find()
-    .select('-password')
-    .sort({
-      createdAt: -1,
-    });
- }
-
- async findById(id: string) {
+  async findById(id: string) {
   return this.userModel
     .findById(id)
     .select('-password');
   }
+
+  async findAll(query: AdminUserQueryDto) {
+  const {
+    page,
+    limit,
+    search,
+    role,
+    isActive,
+    sort,
+    order,
+  } = query;
+
+  const filter: any = {};
+
+  if (search) {
+    filter.$or = [
+      {
+        fullName: {
+          $regex: search,
+          $options: 'i',
+        },
+      },
+      {
+        email: {
+          $regex: search,
+          $options: 'i',
+        },
+      },
+    ];
+  }
+
+  if (role) {
+    filter.role = role;
+  }
+
+  if (isActive !== undefined) {
+    filter.isActive = isActive;
+  }
+
+  const total = await this.userModel.countDocuments(filter);
+
+  const users = await this.userModel
+    .find(filter)
+    .select('-password')
+    .sort({
+      [sort]: order === 'asc' ? 1 : -1,
+    })
+    .skip((page - 1) * limit)
+    .limit(limit);
+
+  return {
+    users,
+    pagination: {
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+    },
+  };
+}
 
   async blockUser(id: string) {
   return this.userModel.findByIdAndUpdate(

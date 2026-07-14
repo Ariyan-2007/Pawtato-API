@@ -1,11 +1,12 @@
 import {
+  Body,
   Controller,
+  Delete,
   Get,
-  UseGuards,
   Param,
   Patch,
-  Delete,
-  Body,
+  Query,
+  UseGuards,
 } from '@nestjs/common';
 
 import {
@@ -16,25 +17,19 @@ import {
 import { AdminService } from './admin.service';
 
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-
 import { RolesGuard } from '../../common/guards/roles.guard';
 
 import { Roles } from '../../common/decorators/roles.decorator';
 
 import { UserRole } from '../../common/enums/user-role.enum';
+
 import { ChangeRoleDto } from './dto/change-role.dto';
+import { AdminUserQueryDto } from './dto/admin-user-query.dto';
 
 @ApiTags('Admin')
 @ApiBearerAuth('JWT-auth')
-
-@UseGuards(
-  JwtAuthGuard,
-  RolesGuard,
-)
-
+@UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(UserRole.ADMIN)
-
-
 @Controller('admin')
 export class AdminController {
   constructor(
@@ -47,48 +42,56 @@ export class AdminController {
   }
 
   @Get('users')
-findAllUsers() {
-  return this.adminService.users();
-}
+  findAllUsers(
+    @Query()
+    query: AdminUserQueryDto,
+  ) {
+    return this.adminService.users(query);
+  }
 
-@Get('users/:id')
-findUser(
-  @Param('id') id: string,
-) {
-  return this.adminService.user(id);
-}
+  @Get('users/:id')
+  findUser(
+    @Param('id')
+    id: string,
+  ) {
+    return this.adminService.user(id);
+  }
 
-@Patch('users/:id/block')
-blockUser(
-  @Param('id') id: string,
-) {
-  return this.adminService.block(id);
-}
+  @Patch('users/:id/block')
+  blockUser(
+    @Param('id')
+    id: string,
+  ) {
+    return this.adminService.block(id);
+  }
 
-@Patch('users/:id/unblock')
-unblockUser(
-  @Param('id') id: string,
-) {
-  return this.adminService.unblock(id);
-}
+  @Patch('users/:id/unblock')
+  unblockUser(
+    @Param('id')
+    id: string,
+  ) {
+    return this.adminService.unblock(id);
+  }
 
-@Patch('users/:id/role')
-changeRole(
-  @Param('id') id: string,
-  @Body() dto: ChangeRoleDto,
-) {
-  return this.adminService.changeRole(
-    id,
-    dto.role,
-  );
-}
+  @Patch('users/:id/role')
+  changeRole(
+    @Param('id')
+    id: string,
 
-@Delete('users/:id')
-deleteUser(
-  @Param('id') id: string,
-) {
-  return this.adminService.delete(id);
-}
+    @Body()
+    dto: ChangeRoleDto,
+  ) {
+    return this.adminService.changeRole(
+      id,
+      dto.role,
+    );
+  }
 
-  
+  @Delete('users/:id')
+  deleteUser(
+    @Param('id')
+    id: string,
+  ) {
+    return this.adminService.delete(id);
+  }
 }

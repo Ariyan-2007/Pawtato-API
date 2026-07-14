@@ -6,6 +6,8 @@ import { VaccinationsService } from '../vaccinations/vaccinations.service';
 import { MedicalService } from '../medical/medical.service';
 
 import { DashboardStatsDto } from './dto/dashboard-stats.dto';
+import { AdminUserQueryDto } from './dto/admin-user-query.dto';
+
 import { UserRole } from '../../common/enums/user-role.enum';
 
 @Injectable()
@@ -18,50 +20,52 @@ export class AdminService {
   ) {}
 
   async dashboard(): Promise<DashboardStatsDto> {
-  return {
-    totalUsers: await this.usersService.count(),
+    return {
+      totalUsers: await this.usersService.count(),
 
-    totalPets: await this.petsService.count(),
+      totalPets: await this.petsService.count(),
 
-    lostPets: await this.petsService.countLost(),
+      lostPets: await this.petsService.countLost(),
 
-    recoveredPets: await this.petsService.countRecovered(),
+      recoveredPets: await this.petsService.countRecovered(),
 
-    totalVaccinations:
-      await this.vaccinationsService.count(),
+      totalVaccinations:
+        await this.vaccinationsService.count(),
 
-    totalMedicalRecords:
-      await this.medicalService.count(),
-   };
+      totalMedicalRecords:
+        await this.medicalService.count(),
+    };
   }
 
-  async users() {
-  return this.usersService.findAll();
+  async users(
+    query: AdminUserQueryDto,
+  ) {
+    return this.usersService.findAll(query);
   }
 
   async user(id: string) {
-  return this.usersService.findById(id);
- }
-
- async block(id: string) {
-  return this.usersService.blockUser(id);
- }
-
-  async unblock(id: string) {
-  return this.usersService.unblockUser(id);
+    return this.usersService.findById(id);
   }
 
- async changeRole(
-   id: string,
-   role: UserRole,
-  ) {
-  return this.usersService.changeRole(
-    id,
-    role,
-  );
- }
+  async block(id: string) {
+    return this.usersService.blockUser(id);
+  }
 
- async delete(id: string) {
-   return this.usersService.deleteUser(id);
- }
+  async unblock(id: string) {
+    return this.usersService.unblockUser(id);
+  }
+
+  async changeRole(
+    id: string,
+    role: UserRole,
+  ) {
+    return this.usersService.changeRole(
+      id,
+      role,
+    );
+  }
+
+  async delete(id: string) {
+    return this.usersService.deleteUser(id);
+  }
 }
