@@ -6,6 +6,7 @@ import { VaccinationsService } from '../vaccinations/vaccinations.service';
 import { MedicalService } from '../medical/medical.service';
 
 import { DashboardStatsDto } from './dto/dashboard-stats.dto';
+import { UserRole } from '../../common/enums/user-role.enum';
 
 @Injectable()
 export class AdminService {
@@ -33,4 +34,34 @@ export class AdminService {
       await this.medicalService.count(),
    };
   }
+
+  async users() {
+  return this.usersService.findAll();
+  }
+
+  async user(id: string) {
+  return this.usersService.findById(id);
+ }
+
+ async block(id: string) {
+  return this.usersService.blockUser(id);
+ }
+
+  async unblock(id: string) {
+  return this.usersService.unblockUser(id);
+  }
+
+ async changeRole(
+   id: string,
+   role: UserRole,
+  ) {
+  return this.usersService.changeRole(
+    id,
+    role,
+  );
+ }
+
+ async delete(id: string) {
+   return this.usersService.deleteUser(id);
+ }
 }

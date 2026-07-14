@@ -2,6 +2,10 @@ import {
   Controller,
   Get,
   UseGuards,
+  Param,
+  Patch,
+  Delete,
+  Body,
 } from '@nestjs/common';
 
 import {
@@ -18,6 +22,7 @@ import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
 
 import { UserRole } from '../../common/enums/user-role.enum';
+import { ChangeRoleDto } from './dto/change-role.dto';
 
 @ApiTags('Admin')
 @ApiBearerAuth('JWT-auth')
@@ -29,6 +34,7 @@ import { UserRole } from '../../common/enums/user-role.enum';
 
 @Roles(UserRole.ADMIN)
 
+
 @Controller('admin')
 export class AdminController {
   constructor(
@@ -39,4 +45,50 @@ export class AdminController {
   dashboard() {
     return this.adminService.dashboard();
   }
+
+  @Get('users')
+findAllUsers() {
+  return this.adminService.users();
+}
+
+@Get('users/:id')
+findUser(
+  @Param('id') id: string,
+) {
+  return this.adminService.user(id);
+}
+
+@Patch('users/:id/block')
+blockUser(
+  @Param('id') id: string,
+) {
+  return this.adminService.block(id);
+}
+
+@Patch('users/:id/unblock')
+unblockUser(
+  @Param('id') id: string,
+) {
+  return this.adminService.unblock(id);
+}
+
+@Patch('users/:id/role')
+changeRole(
+  @Param('id') id: string,
+  @Body() dto: ChangeRoleDto,
+) {
+  return this.adminService.changeRole(
+    id,
+    dto.role,
+  );
+}
+
+@Delete('users/:id')
+deleteUser(
+  @Param('id') id: string,
+) {
+  return this.adminService.delete(id);
+}
+
+  
 }

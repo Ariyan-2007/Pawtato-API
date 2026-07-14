@@ -13,6 +13,7 @@ import { User, UserDocument } from './schemas/user.schema';
 
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
+import { UserRole } from '../../common/enums/user-role.enum';
 
 @Injectable()
 export class UsersService {
@@ -53,9 +54,6 @@ export class UsersService {
   return this.userModel
     .findOne({ email })
     .select('+password');
-  }
-  async findById(id: string) {
-  return this.userModel.findById(id);
   }
 
   async updateRefreshToken(
@@ -107,5 +105,67 @@ async updateProfile(
 
   async count(): Promise<number> {
   return this.userModel.countDocuments();
+  }
+
+  async findAll() {
+  return this.userModel
+    .find()
+    .select('-password')
+    .sort({
+      createdAt: -1,
+    });
+ }
+
+ async findById(id: string) {
+  return this.userModel
+    .findById(id)
+    .select('-password');
+  }
+
+  async blockUser(id: string) {
+  return this.userModel.findByIdAndUpdate(
+    id,
+    {
+      isActive: false,
+    },
+    {
+      new: true,
+    },
+    );
+  }
+
+  async unblockUser(id: string) {
+  return this.userModel.findByIdAndUpdate(
+    id,
+    {
+      isActive: true,
+    },
+    {
+      new: true,
+    },
+   );
+  }
+
+  async changeRole(
+  id: string,
+  role: UserRole,
+) {
+  return this.userModel.findByIdAndUpdate(
+    id,
+    {
+      role,
+    },
+    {
+      new: true,
+    },
+   );
+  }
+
+  async deleteUser(id: string) {
+    await this.userModel.findByIdAndDelete(id);
+
+   return {
+    message: 'User deleted successfully',
+   };
   }
 }
