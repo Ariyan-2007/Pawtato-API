@@ -2,8 +2,11 @@ import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import helmet from 'helmet';
-
+import { NestExpressApplication } from '@nestjs/platform-express';
+import { join } from 'path';
+import * as express from 'express';
 import { AppModule } from './app.module';
+import { ResponseInterceptor } from './common/interceptors/response.interceptor';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
@@ -20,6 +23,27 @@ async function bootstrap() {
     }),
   );
 
+  app.use(
+  '/uploads',
+  express.static(
+    join(process.cwd(), 'uploads'),
+     ),
+   );
+
+ app.useGlobalPipes(
+
+    new ValidationPipe({
+
+        whitelist:true,
+
+        transform:true,
+
+        forbidNonWhitelisted:true,
+
+    }),
+
+);
+    
   const swaggerConfig = new DocumentBuilder()
     .setTitle('Pawtato API')
     .setDescription('Digital Identity Platform for Pets')
