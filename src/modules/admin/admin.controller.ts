@@ -15,16 +15,13 @@ import {
 } from '@nestjs/swagger';
 
 import { AdminService } from './admin.service';
-
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
-
 import { Roles } from '../../common/decorators/roles.decorator';
-
 import { UserRole } from '../../common/enums/user-role.enum';
-
 import { ChangeRoleDto } from './dto/change-role.dto';
 import { AdminUserQueryDto } from './dto/admin-user-query.dto';
+import { AdminPetQueryDto } from './dto/admin-pet-query.dto';
 
 @ApiTags('Admin')
 @ApiBearerAuth('JWT-auth')
@@ -94,4 +91,41 @@ export class AdminController {
   ) {
     return this.adminService.delete(id);
   }
+  @Get('pets')
+findAllPets(
+  @Query()
+  query: AdminPetQueryDto,
+) {
+  return this.adminService.pets(query);
+}
+
+@Get('pets/:id')
+findPet(
+  @Param('id')
+  id: string,
+) {
+  return this.adminService.pet(id);
+}
+
+@Patch('pets/:id/recover')
+recoverPet(
+  @Param('id')
+  id: string,
+) {
+  return this.adminService.recoverPet(id);
+}
+
+@Delete('pets/:id')
+deletePet(
+  @Param('id')
+  id: string,
+) {
+  return this.adminService.deletePet(id);
+}
+
+@Get('analytics')
+analytics() {
+  return this.adminService.analytics();
+}
+
 }

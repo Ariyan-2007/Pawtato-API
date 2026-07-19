@@ -10,6 +10,7 @@ import { Model } from 'mongoose';
 import * as bcrypt from 'bcrypt';
 
 import { User, UserDocument } from './schemas/user.schema';
+import { Pet, PetDocument } from '../pets/schemas/pet.schema';
 
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
@@ -21,6 +22,8 @@ export class UsersService {
   constructor(
     @InjectModel(User.name)
     private readonly userModel: Model<UserDocument>,
+    @InjectModel(Pet.name)
+    private readonly petModel: Model<PetDocument>,
   ) {}
 
   async createUser(createUserDto: CreateUserDto) {
@@ -220,4 +223,44 @@ async updateProfile(
     message: 'User deleted successfully',
    };
   }
+
+  async monthlyRegistrations() {
+  const months = new Array(12).fill(0);
+
+  const users =
+    await this.userModel.find();
+
+  users.forEach((user) => {
+    const createdAt = user.get('createdAt');
+
+    if (createdAt) {
+      months[
+        new Date(
+          createdAt,
+        ).getMonth()
+      ]++;
+    }
+  });
+
+  return months;
+}
+
+async monthlyQrScans() {
+  const months = new Array(12).fill(0);
+
+  const pets =
+    await this.petModel.find();
+
+  pets.forEach((pet) => {
+    if (pet.lastScannedAt) {
+      months[
+        new Date(
+          pet.lastScannedAt,
+        ).getMonth()
+      ] += pet.scanCount;
+    }
+  });
+
+  return months;
+}
 }

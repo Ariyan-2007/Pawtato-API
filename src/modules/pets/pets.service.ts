@@ -8,6 +8,7 @@ import { nanoid } from 'nanoid';
 import { Pet, PetDocument } from './schemas/pet.schema';
 import { CreatePetDto } from './dto/create-pet.dto';
 import { UpdatePetDto } from './dto/update-pet.dto';
+import { AdminPetQueryDto } from '../admin/dto/admin-pet-query.dto';
 import { QrService } from '../qr/qr.service';
 import { ReportLostDto } from './dto/report-lost.dto';
 
@@ -221,5 +222,154 @@ export class PetsService {
   });
  }
 
+ async findAllAdmin(query: AdminPetQueryDto) {
+  const {
+    page,
+    limit,
+    search,
+    species,
+    isLost,
+    sort,
+    order,
+  } = query;
+
+  const filter: any = {};
+
+  if (search) {
+    filter.$or = [
+      {
+        name: {
+          $regex: search,
+          $options: 'i',
+        },
+      },
+      {
+        publicId: {
+          $regex: search,
+          $options: 'i',
+        },
+      },
+    ];
+  }
+
+  if (species) {
+    filter.species = species;
+  }
+
+  if (isLost !== undefined) {
+    filter.isLost = isLost;
+  }
+
+  const total =
+    await this.petModel.countDocuments(filter);
+
+  const pets =
+    await this.petModel
+      .find(filter)
+      .populate(
+        'owner',
+        'fullName email',
+      )
+      .sort({
+        [sort]:
+          order === 'asc'
+            ? 1
+            : -1,
+      })
+      .skip((page - 1) * limit)
+      .limit(limit);
+
+  return {
+    pets,
+    pagination: {
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(
+        total / limit,
+      ),
+    },
+  };
+}
+
+async findByIdAdmin(id: string) {
+  return this.petModel
+    .findById(id)
+    .populate(
+      'owner',
+      'fullName email',
+    );
+}
+
+async recoverPet(id: string) {
+  return this.petModel.findByIdAndUpdate(
+    id,
+    {
+      isLost: false,
+      lostDate: null,
+      lastSeenLocation: null,
+      lostDescription: null,
+      reward: null,
+    },
+    {
+      new: true,
+    },
+  );
+}
+
+async deletePet(id: string) {
+  await this.petModel.findByIdAndDelete(id);
+
+  return {
+    message: 'Pet deleted successfully',
+  };
+}
+
+async topScannedPets() {
+  return this.petModel
+    .find()
+    .sort({
+      scanCount: -1,
+    })
+    .limit(10)
+    .select(
+      'name publicId scanCount profileImage',
+    );
+}
+
+async speciesDistribution() {
+  return this.petModel.aggregate([
+    {
+      $group: {
+        _id: '$species',
+        count: {
+          $sum: 1,
+        },
+      },
+    },
+    {
+      $project: {
+        _id: 0,
+        species: '$_id',
+        count: 1,
+      },
+    },
+  ]);
+}
+
+
+async monthlyRegistrations() {
+  const months = new Array(12).fill(0);
+
+  const pets = await this.petModel.find().lean().exec() as Array<Pet & { createdAt?: Date }>;
+
+  pets.forEach((pet) => {
+    if (pet.createdAt) {
+      months[new Date(pet.createdAt).getMonth()]++;
+    }
+  });
+
+  return months;
+}
 
 }

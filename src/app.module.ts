@@ -14,7 +14,9 @@ import { join } from 'path';
 import { MedicalModule } from './modules/medical/medical.module';
 import { VaccinationsModule } from './modules/vaccinations/vaccinations.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
+import { ScheduleModule } from '@nestjs/schedule';
 import { AdminModule } from './modules/admin/admin.module';
+import { ActivityModule} from './modules/activity/activity.module';
 
 
 @Module({
@@ -28,6 +30,7 @@ import { AdminModule } from './modules/admin/admin.module';
      rootPath: join(process.cwd(), 'uploads'),
      serveRoot: '/uploads',
     }),
+    ScheduleModule.forRoot(),
 
     DatabaseModule,
 
@@ -50,6 +53,8 @@ import { AdminModule } from './modules/admin/admin.module';
     NotificationsModule,
 
     AdminModule,
+
+    ActivityModule,
   ],
 })
 export class AppModule {}
