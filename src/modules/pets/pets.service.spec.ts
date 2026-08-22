@@ -2,7 +2,6 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { getModelToken } from '@nestjs/mongoose';
 import { PetsService } from './pets.service';
 import { Pet } from './schemas/pet.schema';
-import { QrService } from '../qr/qr.service';
 
 describe('PetsService', () => {
   let service: PetsService;
@@ -12,7 +11,6 @@ describe('PetsService', () => {
       providers: [
         PetsService,
         { provide: getModelToken(Pet.name), useValue: {} },
-        { provide: QrService, useValue: {} },
       ],
     }).compile();
 

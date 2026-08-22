@@ -5,6 +5,7 @@ import { UsersController } from './users.controller';
 import { UsersService } from './users.service';
 
 import { User, UserSchema } from './schemas/user.schema';
+import { Pet, PetSchema } from '../pets/schemas/pet.schema';
 
 @Module({
   imports: [
@@ -12,6 +13,10 @@ import { User, UserSchema } from './schemas/user.schema';
       {
         name: User.name,
         schema: UserSchema,
+      },
+      {
+        name: Pet.name,
+        schema: PetSchema,
       },
     ]),
   ],

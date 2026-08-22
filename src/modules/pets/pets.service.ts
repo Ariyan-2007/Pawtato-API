@@ -1,12 +1,10 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { QueryFilter, Model, Types } from 'mongoose';
-import { nanoid } from 'nanoid';
 import { Pet, PetDocument } from './schemas/pet.schema';
 import { CreatePetDto } from './dto/create-pet.dto';
 import { UpdatePetDto } from './dto/update-pet.dto';
 import { AdminPetQueryDto } from '../admin/dto/admin-pet-query.dto';
-import { QrService } from '../qr/qr.service';
 import { ReportLostDto } from './dto/report-lost.dto';
 
 @Injectable()
@@ -14,20 +12,12 @@ export class PetsService {
   constructor(
     @InjectModel(Pet.name)
     private readonly petModel: Model<PetDocument>,
-
-    private readonly qrService: QrService,
   ) {}
 
   async create(ownerId: string, createPetDto: CreatePetDto) {
-    const publicId = nanoid(10);
-
-    const qrCode = await this.qrService.generate(publicId);
-
     const pet = await this.petModel.create({
       ...createPetDto,
       owner: new Types.ObjectId(ownerId),
-      publicId,
-      qrCode,
     });
 
     return pet;
@@ -207,12 +197,6 @@ export class PetsService {
             $options: 'i',
           },
         },
-        {
-          publicId: {
-            $regex: search,
-            $options: 'i',
-          },
-        },
       ];
     }
 
@@ -255,6 +239,10 @@ export class PetsService {
     return this.petModel.findById(id).populate('owner', 'fullName email');
   }
 
+  async findWithOwner(id: string) {
+    return this.petModel.findById(id).populate('owner', 'fullName email');
+  }
+
   async recoverPet(id: string) {
     return this.petModel.findByIdAndUpdate(
       id,
@@ -286,7 +274,7 @@ export class PetsService {
         scanCount: -1,
       })
       .limit(10)
-      .select('name publicId scanCount profileImage');
+      .select('name scanCount profileImage');
   }
 
   async speciesDistribution() {

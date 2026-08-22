@@ -5,6 +5,9 @@ import { PublicController } from './public.controller';
 import { PublicService } from './public.service';
 
 import { Pet, PetSchema } from '../pets/schemas/pet.schema';
+import { Tag, TagSchema } from '../tags/schemas/tag.schema';
+import { ScansModule } from '../scans/scans.module';
+import { FoundReportsModule } from '../found-reports/found-reports.module';
 
 @Module({
   imports: [
@@ -13,7 +16,14 @@ import { Pet, PetSchema } from '../pets/schemas/pet.schema';
         name: Pet.name,
         schema: PetSchema,
       },
+      {
+        name: Tag.name,
+        schema: TagSchema,
+      },
     ]),
+
+    ScansModule,
+    FoundReportsModule,
   ],
 
   controllers: [PublicController],

@@ -15,9 +15,9 @@ This file is the **execution source of truth** for taking Pawtato from its curre
 
 ## Current Status
 
-- **Active Phase:** Phase 2 — QR Tag Domain Correction (not started)
-- **Phase 1 Status:** Complete
-- **Last updated:** 2026-08-22
+- **Active Phase:** Phase 4 — Notifications & Domain Events (not started)
+- **Phase 3 Status:** Complete
+- **Last updated:** 2026-08-23
 
 ---
 
@@ -42,9 +42,9 @@ Working end-to-end today: register/login (JWT + refresh), pet CRUD with ownershi
 
 ### Key gaps vs `PAWTATO_PROJECT_SPEC.md` (drives Phases 1–3)
 
-1. **No independent QR Tag entity.** Spec §4 calls this out as an *"important architectural rule"*: a tag must exist independently of a pet, with its own lifecycle (Manufactured → Available → Assigned → Suspended/Retired) and a stable public code used for resolution. Today `qrCode`/`publicId` are just fields on the `Pet` schema and `QrService.generate()` is a stateless PNG generator with no `Tag` collection, no assign/unassign, no inventory. → **Phase 2**.
-2. **No Found-Report / Finder flow.** Spec §6 and §26 (MVP "must have") require a finder to submit a report without an account. No such endpoint or schema exists today; only a lost-status field lives on `Pet`. → **Phase 3**.
-3. **No scan-event audit trail.** Spec §8 wants scan events as first-class records (for analytics/abuse detection). Today a scan only increments `Pet.scanCount`/`lastScannedAt` as a side effect of a GET request — no queryable history. → **Phase 3**.
+1. ~~**No independent QR Tag entity.**~~ **Fixed in Phase 2.** A first-class `Tag` model now exists with the full lifecycle, and `Pet.qrCode`/`Pet.publicId` have been removed in favor of it.
+2. ~~**No Found-Report / Finder flow.**~~ **Fixed in Phase 3.** `POST /public/tags/:publicCode/found-report` now exists, no account required.
+3. ~~**No scan-event audit trail.**~~ **Fixed in Phase 3.** A `ScanEvent` is now recorded on every public scan (`src/modules/scans/`), independent of `Pet.scanCount` (kept as a cheap derived counter).
 4. **No rate limiting.** Spec §16/§17 explicitly requires rate limiting on public endpoints, assuming automated abuse. No `@nestjs/throttler` (or equivalent) is installed or configured anywhere. → **Phase 1**.
 5. **No CORS configuration, no global exception filter, no global response interceptor actually wired.** `ResponseInterceptor` exists in `src/common/interceptors/` but is never registered (`app.useGlobalInterceptors` is never called in `main.ts`) — the standardized `{ success, message, data }` envelope is currently dead code, not the real API shape. → **Phase 1**.
 6. **`Joi` is a dependency but unused.** `ConfigModule.forRoot` has no `validationSchema`, so a missing `.env` var (e.g. `JWT_SECRET`) fails silently/late instead of at boot. → **Phase 1**.
@@ -62,14 +62,15 @@ Working end-to-end today: register/login (JWT + refresh), pet CRUD with ownershi
 | # | Phase | Status |
 |---|-------|--------|
 | 1 | Production Readiness Revamp | **Complete** (2026-08-22) |
-| 2 | QR Tag Domain Correction | Not started |
-| 3 | Lost & Found Flow Completion | Not started |
+| 2 | QR Tag Domain Correction | **Complete** (2026-08-22) |
+| 3 | Lost & Found Flow Completion | **Complete** (2026-08-23) |
 | 4 | Notifications & Domain Events | Not started |
 | 5 | Media & Storage Abstraction | Not started |
 | 6 | Testing & Quality Gate | Not started |
 | 7 | Admin, Audit & Abuse Handling | Not started |
 | 8 | Performance & Observability | Not started |
 | 9 | Post-MVP Backlog (unscheduled) | Reference only |
+| 10 | Pet Dating & Companion Matching | Not started |
 
 ---
 
@@ -140,24 +141,28 @@ Working end-to-end today: register/login (JWT + refresh), pet CRUD with ownershi
 **Goal:** Bring the QR system in line with spec §4/§9 — a `Tag` independent from `Pet`, with an explicit lifecycle and assignment history, resolved via a stable public code (not an internal ID).
 
 ### Tasks
-- [ ] Create a `Tag` schema/module: `publicCode` (unique, indexed), `serialNumber` (unique), `status` enum (`Manufactured | Available | Assigned | Suspended | Retired`), `assignedPetId` (nullable ref), `createdAt`, `assignedAt`, `unassignedAt`.
-- [ ] Add tag endpoints: list/create (admin-seeded inventory), `assign` (owner assigns an available tag to their own pet — validate ownership + tag assignability), `unassign`, `suspend`/`retire` (admin).
-- [ ] Enforce "at most one active assignment per tag" and "at most one active tag per pet" (or explicitly support multiple tags per pet if desired — decide and document the assumption per spec §28 rule 20).
-- [ ] Update `QrService` to encode `https://<APP_URL>/t/{publicCode}` instead of an internal pet `publicId`; keep image generation logic, but make it resolve through the `Tag`, not directly through `Pet`.
-- [ ] Update the public lookup route to resolve `Tag.publicCode → Pet`, not `Pet.publicId` directly (keep `Pet.publicId` internal, or deprecate it in favor of the tag). Do not expose the pet's internal Mongo `_id` anywhere in this path.
-- [ ] Migrate/backfill: for pets that already have a `qrCode`, create a corresponding `Tag` document so existing QR images keep working (or document why a clean break is acceptable for pre-launch data).
-- [ ] Add indexes: `Tag.publicCode`, `Tag.serialNumber`, `Tag.assignedPetId`.
+- [x] Created a `Tag` schema/module (`src/modules/tags/`): `publicCode` (unique, indexed, server-generated via `nanoid`, never client-supplied), `serialNumber` (unique, indexed, client-optional/auto-generated), `status` enum `TagStatus` (`MANUFACTURED | AVAILABLE | ASSIGNED | SUSPENDED | RETIRED`, in `common/enums/tag-status.enum.ts`), `assignedPetId` (nullable ref to `Pet`), `qrImageUrl`, `createdAt`/`updatedAt` (via `timestamps: true`), `assignedAt`, `unassignedAt`.
+- [x] Added tag endpoints on `TagsController` (`/tags`): `POST /tags` (admin, create — seeds directly as `AVAILABLE`; see assumption below), `GET /tags` (admin, paginated inventory with optional `status` filter), `GET /tags/mine` (authenticated, tags assigned to the caller's own pets), `GET /tags/:id` (admin), `POST /tags/assign` (authenticated, body `{ publicCode, petId }` — a real user only ever knows the code printed on the physical tag, never an internal Mongo ID, so assign/unassign are keyed on `publicCode` rather than `:id`), `POST /tags/unassign` (authenticated, body `{ publicCode }`, allowed for the owner of the currently-assigned pet or an admin), `PATCH /tags/:id/suspend` (admin), `PATCH /tags/:id/retire` (admin).
+- [x] Enforced "at most one active tag per pet" two ways: an application-level check in `TagsService.assign()` (rejects with 400 if the pet already has an `ASSIGNED` tag), plus a DB-level partial unique index on `Tag.assignedPetId` (`partialFilterExpression: { assignedPetId: { $type: 'objectId' } }`) so the constraint holds even under concurrent requests, while still allowing unlimited unassigned (`null`) tags to coexist. "At most one active assignment per tag" is structurally guaranteed (a tag has exactly one `assignedPetId` field). **Assumption**: a pet has at most one tag at a time — reassignment means unassign-then-assign, not multiple simultaneous tags per pet (matches the spec's single-tag worked example; documented here per spec §28 rule 20).
+- [x] Updated `QrService.generate()` to encode the tag's public resolution URL and, more importantly, moved *when* it's called: QR generation now happens once, at tag creation (`TagsService.create()`), not at pet creation. This is a real architectural fix, not just a rename — the physical sticker's QR image must stay valid forever across reassignment to different pets, since resolution is dynamic (tag → currently-assigned pet, looked up at scan time), so the image content must never depend on which pet is currently attached.
+- [x] **Documented deviation from the task's literal URL**: the task specifies encoding `https://<APP_URL>/t/{publicCode}`. This repo is API-only (no frontend project present anywhere in the working tree), so `/t/{code}` would resolve to nothing. Kept the QR payload pointing directly at this API's own public resolution route — `${APP_URL}/api/public/tags/{publicCode}` — mirroring exactly how the pre-Phase-2 code already worked (it pointed at `/api/public/pets/{publicId}` directly, not a frontend route). `APP_URL` is already a single config value, so once a real frontend exists, pointing QR codes at it is a one-line config/URL-building change, not a rearchitecture.
+- [x] Replaced the public lookup route: `GET /public/pets/:publicId` → `GET /public/tags/:publicCode`, resolving `Tag.publicCode → Tag.assignedPetId → Pet`. Handles three tag states explicitly instead of just 404ing: `RETIRED`/`SUSPENDED` return a clear status message, and an tag that exists but isn't currently `ASSIGNED` returns "not linked to a pet yet" rather than crashing or leaking anything — this matters because a real finder can absolutely scan a tag that was never assigned. The pet's internal Mongo `_id` is never present anywhere in the public response.
+- [x] **Removed `Pet.publicId` and `Pet.qrCode` from the `Pet` schema entirely** rather than keeping them as unused legacy fields — `Tag.publicCode`/`Tag.qrImageUrl` fully replace their role, and per this project's own stated principle (avoid backwards-compat cruft for fields nothing reads), keeping them would just be dead weight. Removed the matching `nanoid`/`QrService` calls from `PetsService.create()` (pet creation no longer generates a QR code — assigning a physical tag is now a separate, later step, matching the real product flow in spec §2/§27). Cleaned up the two other places that referenced the now-gone `publicId` field: the admin pet search filter (search is now by name only — an admin can search tags separately via the new `GET /tags`) and `topScannedPets()`'s field selection.
+- [x] **Fixed a regression the field removal would otherwise have caused**: `PublicService.getLostPets()` used to return each pet's `publicId` so a finder could click through to its profile. With that field gone, the public lost-pets listing needed a replacement identifier — it now does a batched lookup of each listed pet's currently-`ASSIGNED` tag and returns that tag's `publicCode` instead (and explicitly does not leak the pet's internal `_id`, which a naive `.lean()` spread would have included).
+- [x] **Migration/backfill — clean break, not a migration script**: chose not to write a backfill for pets with a pre-existing `qrCode`. This project has no production users or live pet data yet (confirmed in the Phase 1 baseline audit — this is pre-launch), so any existing dev/test `Pet` documents with the old fields can simply be recreated against the new `Tag`-based flow; a migration script would be pure overhead for data that doesn't need preserving.
+- [x] Added indexes: `Tag.publicCode` (unique + index), `Tag.serialNumber` (unique + index), and the partial unique index on `Tag.assignedPetId` described above (which also serves as the "queryable by assigned pet" index).
+- [x] Verified the whole change set at the decorator level without needing a live database: `node -e "require('./dist/app.module.js')"` loads and evaluates every schema/controller/DTO decorator in the entire app (the same mechanism that crashed in Phase 1 on `Activity`/`User`) with zero errors — a stronger, network-independent check than the live-boot attempt Phase 1 couldn't complete in this sandbox. Live DB connection + Swagger UI render is still unverified here (no network egress in this sandbox at all — confirmed via a raw DNS/socket test) and remains an open item from Phase 1.
 
 ### Swagger Requirement
-Apply the Phase 1 Swagger Requirement to every new `tags` endpoint and to the updated `public` routes, including the new `Tag` DTOs and status enum in the schema docs.
+Applied: every `tags` endpoint has full `@ApiTags`/`@ApiOperation`/`@ApiResponse` coverage (including the "not available"/"not found" error cases), every new DTO (`CreateTagDto`, `AssignTagDto`, `UnassignTagDto`, `TagQueryDto`) is fully `@ApiProperty`-annotated, and the updated `public.controller.ts` route's Swagger description explicitly documents the three possible response shapes (assigned/unassigned/suspended-retired) so API consumers don't assume it's always a full pet profile.
 
 ### Definition of Done
-- Tags exist as first-class records with a real lifecycle, assignable/unassignable independent of pet deletion.
-- QR codes resolve via `publicCode`, never an internal ID.
-- Ownership and assignability are validated server-side on every tag mutation.
+- [x] Tags exist as first-class records with a real lifecycle, assignable/unassignable independent of pet deletion.
+- [x] QR codes resolve via `publicCode`, never an internal ID (encoding an API URL rather than the literal `/t/{code}` frontend path — see documented assumption above).
+- [x] Ownership and assignability are validated server-side on every tag mutation (`assign`/`unassign` both go through `PetsService.findOwnedPet`, which throws a uniform `NotFoundException` for both "doesn't exist" and "not yours," matching this codebase's established IDOR-prevention convention).
 
 ### Status
-Not started.
+**Complete** (2026-08-22). `npm run lint`, `npm run build`, and `npm test` (22/22 suites, up from 20 — added `tags.controller.spec.ts`/`tags.service.spec.ts`) all pass clean. Two items carried forward, both inherited from Phase 1 and not new to this phase: live DB-connected boot and an actual look at `/api/docs` in a browser are still unverified in this sandbox (no network egress at all here, confirmed directly) — do both once against a real MongoDB before treating Phase 1 *or* 2 as fully closed in production.
 
 ---
 
@@ -166,23 +171,32 @@ Not started.
 **Goal:** Complete the core "find a lost pet" loop from spec §6–§8: finder reports, scan history, and owner-facing visibility into both — without requiring the finder to register.
 
 ### Tasks
-- [ ] Add a `ScanEvent` schema (`tagId`, `petId` at scan time, `timestamp`, coarse location if provided, user-agent) and record one on every public scan, replacing the current `Pet.scanCount` side-effect-on-GET approach (keep the counter as a derived/cached value if useful, but the event log is the source of truth).
-- [ ] Add a `FoundReport` schema (`tagId`/`petId`, message, approximate location, optional contact info, optional photo, `foundAt`, `createdAt`) and a public `POST /public/tags/{publicCode}/found-report` endpoint requiring no account.
-- [ ] Add owner-facing endpoints to list found reports and scan history for their own pets (ownership-scoped).
-- [ ] Wire "pet marked lost" / "found report submitted" to trigger a notification to the owner (can be a direct call to `NotificationsService` in this phase; Phase 4 abstracts it further).
-- [ ] Add abuse protections on the public found-report endpoint specifically (throttling from Phase 1, plus basic payload size/content limits for the optional photo).
-- [ ] Confirm the public pet profile response still excludes anything on the "must not expose" list in spec §5/§16 (owner phone unless opted in, addresses, medical notes, internal IDs).
+- [x] Added a `ScanEvent` schema/module (`src/modules/scans/`): `tag` (ref, indexed), `pet` (nullable ref, indexed — `null` when the scanned tag isn't currently linked to a pet), `approxLocation` (optional, not auto-populated — see assumption below), `userAgent` (captured from the request header), `createdAt` (indexed, via `timestamps: true`). Recorded on **every** public scan via `PublicService.getPetProfile()` — assigned, unassigned, suspended, and retired tags all produce a `ScanEvent`; only an outright nonexistent tag code (404, no tag doc to reference) does not. `Pet.scanCount`/`lastScannedAt` are kept as-is (cheap derived counters), per the task's own "keep the counter if useful" allowance — `ScanEvent` is the real source of truth for history/analytics.
+- [x] **Assumption**: `approxLocation` is schema-ready but not populated by the automatic scan path — implementing real IP-geolocation would mean adding a new third-party dependency/service for a "nice to have" per spec §8, so it's left for a future phase if wanted. It's populated on `FoundReport` instead, where the finder voluntarily types a location — that's both simpler and more privacy-appropriate than IP-based inference.
+- [x] Added a `FoundReport` schema/module (`src/modules/found-reports/`): `tag`/`pet` (refs, indexed), `message` (required), `approxLocation`/`contactInfo` (optional, finder-supplied), `photoUrl` (optional), `foundAt` (defaults to submission time). Public endpoint: `POST /public/tags/:publicCode/found-report`, multipart, no auth. Validates the tag resolves to a currently-`ASSIGNED` pet (400 if not — you can't "find" a pet that isn't linked to that tag) before accepting the report.
+- [x] Added owner-facing, ownership-scoped listing endpoints, following the exact routing convention already established by `medical`/`vaccinations`: `GET /pets/:petId/scans` and `GET /pets/:petId/found-reports`.
+- [x] Wired "found report submitted" → owner email notification via a direct `NotificationsService.sendEmail(...)` call (per this phase's own allowance; Phase 4 replaces this with a proper event bus). **Deliberately did not wire "pet marked lost" → owner notification in this phase**: `PetsModule` would need to import `NotificationsModule` to do it directly, but `NotificationsModule → VaccinationsModule → PetsModule` already exists (traced the actual import graph before writing any code), so that would be a real circular module dependency, not just a hypothetical one. Forcing it through now (`forwardRef()`) would be exactly the kind of coupling Phase 4's event bus exists to remove — deferred there instead of band-aiding it here. Found-report notification didn't hit this problem since `FoundReportsModule` is new and has no existing reverse edge to worry about.
+- [x] Abuse protections on the found-report endpoint: a new, stricter `write` throttle tier (5 req/min, vs. the general `public` tier's 20/min) applied via `@Throttle`; photo upload capped at 5MB with a JPEG/PNG/WebP-only `fileFilter` (rejects anything else with a 400 before it touches disk).
+- [x] Confirmed the public pet profile response (`PublicService.getPetProfile`) still excludes everything on the "must not expose" list — re-read the exact field list returned: no owner name/email/password, no internal Mongo IDs, no address. Unchanged from Phase 2, still correct.
+- [x] **Found and fixed two bugs while building this, before they shipped**: (1) `FoundReportsService` originally returned the raw Mongoose `FoundReport` document straight to the public, unauthenticated finder — which carries the pet's and tag's internal Mongo `_id`s in the `pet`/`tag` fields, a direct violation of the same "never expose internal IDs publicly" principle enforced everywhere else. Fixed by having `PublicService.submitFoundReport()` return a plain `{ message }` confirmation instead of the raw doc. (2) The owner-notification email call was unguarded — if `MailerService.sendMail` throws (bad SMTP config, network blip), the exception would have propagated up and turned a *successfully saved* found report into a 500 response to the finder, who'd have no way to know their report actually went through. Wrapped the notification step in try/catch with a logged error; the report's success no longer depends on email delivery succeeding.
+
+### A larger finding along the way: a severe pre-existing DI bug, plus a new permanent regression test for it
+While reasoning through module import chains to safely wire notifications without a cycle, direct inspection of `users.module.ts` turned up something serious: `UsersService`'s constructor injects the `Pet` Mongoose model (`@InjectModel(Pet.name)`, used by `monthlyQrScans()`), but `UsersModule` never registers or imports it anywhere. This is not a Phase 3 regression — it predates Phase 1 and has been there since the baseline audit; it was simply never caught because every existing `*.spec.ts` mocks its dependencies directly (bypassing real Nest module wiring) and this sandbox has never had live DB/network access to catch it via an actual boot attempt.
+
+Verified it conclusively without a live database: built a `Test.createTestingModule({ imports: [AppModule] })` compile with the Mongoose connection provider (`getConnectionToken()`) overridden with a minimal fake (`{ models: {}, model: (name) => ({...}) }`) — this exercises Nest's **real** dependency-injection graph resolution for the entire app, decorator wiring included, with zero network calls. Before the fix, this failed with exactly the error a real boot would produce: `Nest can't resolve dependencies of the UsersService (UserModel, ?). Please make sure that the argument "PetModel" ... is available in the UsersModule module.` Since `AuthModule` (and by extension nearly the whole authenticated API surface) depends on `UsersModule`, this would have crashed the app on every single real-world boot attempt, in any environment. Fixed by registering `Pet`'s schema locally in `UsersModule` (matching the pattern `PublicModule` already used for the same reason).
+
+This verification technique is valuable enough to keep permanently rather than throw away: it now lives at `src/app.di-check.spec.ts`, runs as part of `npm test`/CI on every push, and will catch this entire class of bug (a provider injected but never registered/imported anywhere reachable) automatically in every future phase — including the two new modules this phase added. This substantially closes the "live boot unverified" gap carried forward from Phase 1/2: the full provider graph is now proven to resolve; only an actual live network/DB connection (still unavailable in this sandbox) remains unverified.
 
 ### Swagger Requirement
-Document `ScanEvent` and `FoundReport` DTOs fully; document the public found-report endpoint's lack of auth requirement explicitly (`@ApiOperation({ summary: '...', description: 'No authentication required.' })`) so API consumers don't assume it needs a token.
+Applied: `ScansController`/`FoundReportsController` have full `@ApiTags`/`@ApiOperation`/`@ApiResponse` coverage; the public found-report endpoint's Swagger explicitly states "No authentication required" in its description and documents the `multipart/form-data` shape (`@ApiConsumes`/`@ApiBody`) including the optional photo field; `CreateFoundReportDto` is fully `@ApiProperty`-annotated.
 
 ### Definition of Done
-- A finder can scan → view profile → submit a found report, with zero account creation, and the owner can see it.
-- Every scan produces a queryable event; every report produces a queryable record.
-- Public write endpoints are rate-limited and validated.
+- [x] A finder can scan → view profile → submit a found report, with zero account creation, and the owner can see it (via `GET /pets/:petId/found-reports` and, since Phase 3 wires it, an email).
+- [x] Every scan produces a queryable `ScanEvent`; every report produces a queryable `FoundReport`.
+- [x] Public write endpoints are rate-limited (`write` tier, 5/min) and validated (DTO validation + file type/size limits).
 
 ### Status
-Not started.
+**Complete** (2026-08-23). `npm run lint`, `npm run build`, and `npm test` (27/27 suites, up from 22) all pass clean. The new `src/app.di-check.spec.ts` is now part of that count and part of CI going forward. Carried forward, unchanged from Phase 1/2: an actual live network/DB connection and a look at `/api/docs` in a browser remain unverified in this sandbox (no network egress at all here) — the DI-graph finding above means this is now a much smaller residual risk than it was, but it's still worth doing once before real deployment.
 
 ---
 
@@ -308,7 +322,56 @@ Not phased yet — pull items from here into a new numbered phase when the team 
 
 ---
 
+## Phase 10 — Pet Dating & Companion Matching
+
+**Provenance note:** unlike Phases 1–9, this phase is **not** derived from `PAWTATO_PROJECT_SPEC.md` — it doesn't mention pet dating/matching anywhere. It was requested directly by the user on 2026-08-22, alongside a companion PWA-first frontend blueprint (`PAWTATO_FRONTEND_BLUEPRINT.md`). Treat this phase as a real, intentional scope addition, not spec drift — but if a future session finds it conflicts with an updated spec, the spec wins and this phase gets revisited.
+
+**Concept (as scoped with the user):** owners can opt any of their pets into a matching feature. Each pet's dating profile declares its own **purpose** — `PLAYDATE`, `BREEDING`, or `BOTH` — and discovery/matching respects that (a playdate-only pet is never surfaced to a breeding-only search, and vice versa, unless one side is `BOTH`). This is a swipe-to-match model (mutual like -> match -> lightweight chat), scoped for cats and dogs only, matching the rest of the platform.
+
+**Goal:** Ship the matching feature as its own bounded module with minimal coupling to the rest of the app — it reads `Pet`/`User` (species, owner, location-adjacent fields) but nothing in the existing modules should need to know matching exists.
+
+### Tasks
+
+**Domain model** (new `src/modules/dating/` module)
+- [ ] `PetDatingProfile` schema: `petId` (ref, unique — one profile per pet), `purpose` enum (`PLAYDATE | BREEDING | BOTH`), `bio` (short text), `temperamentTags` (string array, e.g. `playful`, `calm`, `good-with-kids`), `photos` (array of image URLs, separate from the pet's main `profileImage` so owners can curate a dating-specific gallery), `approxLocation` (coarse — city/area string, or lat/lng rounded to ~1km; never the owner's precise address, matching spec §17's location-minimization principle), `isActive` (boolean — owner can pause visibility without deleting the profile).
+- [ ] For `BREEDING`/`BOTH` purpose: optional `healthVerified` flag that can only be set `true` by cross-referencing the pet's own `medical`/`vaccinations` records (reuse those modules — don't duplicate health data into the dating profile).
+- [ ] `Swipe` schema: `fromPetId`, `toPetId`, `action` (`LIKE | PASS`), `createdAt`. Unique compound index on `(fromPetId, toPetId)` — a pet can't swipe the same pet twice.
+- [ ] `Match` schema: `petAId`, `petBId` (store in a canonical/sorted order to make lookups trivial), `matchedAt`, `status` (`ACTIVE | UNMATCHED`).
+- [ ] `Message` schema (lightweight, not a full chat system): `matchId`, `senderUserId`, `content`, `createdAt`, `readAt`.
+- [ ] `DatingReport` schema: `reporterUserId`, `targetPetId`, `reason`, `status` (`PENDING | REVIEWED | ACTIONED`) — feeds into Phase 7's admin abuse-handling work rather than inventing a separate moderation system.
+
+**API surface**
+- [ ] `POST /pets/:petId/dating-profile` / `PATCH /pets/:petId/dating-profile` (owner only, via the same `findOwnedPet` ownership pattern used everywhere else) — create/update.
+- [ ] `GET /dating/discover?petId=` (owner) — paginated candidate pets to swipe on: same species as the swiping pet, purpose-compatible, excludes the owner's own pets and anything already swiped, `isActive: true` only.
+- [ ] `POST /dating/swipe` — body `{ fromPetId, toPetId, action }`; validates the caller owns `fromPetId`; if the target already `LIKE`d back, creates a `Match` and returns it in the response (so the client knows immediately, no polling needed).
+- [ ] `GET /dating/matches` (owner) — all matches across the owner's pets.
+- [ ] `GET /dating/matches/:matchId/messages`, `POST /dating/matches/:matchId/messages` — basic thread; validate caller owns one side of the match.
+- [ ] `POST /dating/matches/:matchId/unmatch` — either side can unmatch.
+- [ ] `POST /dating/report` — report a pet's dating profile; feeds the Phase 7 admin moderation queue.
+- [ ] Admin (Phase 7 extension, not duplicated here): `GET /admin/dating/reports`, action endpoints to deactivate a reported profile.
+
+**Safety & scope guards**
+- [ ] Rate-limit `POST /dating/swipe` (reuse the Phase 1 throttler pattern) — this is the one endpoint in this module that's meaningfully abusable (mass-swiping/scraping).
+- [ ] Never expose precise owner location or contact info through discovery or match payloads before a match exists; once matched, follow the same opt-in contact-reveal principle as the lost-pet finder flow (spec §17) rather than auto-exposing phone/email.
+- [ ] Confirm species-only matching (no cross-species suggestions) and purpose-compatibility filtering are enforced server-side, not just in client UI.
+
+### Swagger Requirement
+Full `@ApiTags`/`@ApiOperation`/`@ApiResponse` coverage for every new `dating`-prefixed and `pets/:petId/dating-profile` route, with the purpose enum and match/report DTOs fully documented — this module is exactly as bound by the Phase 1 Swagger mandate as any other.
+
+### Definition of Done
+- A pet's dating visibility respects its declared purpose in both directions (never surfaced to, nor able to discover, an incompatible purpose).
+- Mutual likes reliably produce exactly one `Match` (no duplicate matches from race conditions — cover this with a unique index, same pattern as the Phase 2 "one active tag per pet" constraint).
+- No module outside `dating/` has a hard dependency on it; deleting the module would not break pets/auth/admin.
+
+### Status
+Not started. Sequencing note: this can be built any time after Phase 2 (needs `Pet`/`User` only) — it doesn't block or get blocked by Phases 3–9, so a future session can slot it in whenever the user prioritizes it, not strictly in numeric order.
+
+---
+
 ## Progress Log
 
 - **2026-08-22** — Roadmap created after a full baseline audit of the existing NestJS codebase against `PAWTATO_PROJECT_SPEC.md`. No phases started yet. Key gaps identified: no independent QR Tag entity, no found-report/scan-event tracking, missing production hardening (rate limiting, CORS, config validation, CI/Docker), dead legacy files, Swagger coverage incomplete.
 - **2026-08-22** — Phase 1 (Production Readiness Revamp) completed. Cleaned up dead code, added Joi env validation, wired CORS/throttling/global exception filter/response interceptor, added structured logging with secret redaction, added Dockerfile + CI, and brought Swagger coverage to 100% of controllers/DTOs. Along the way, found and fixed several real pre-existing bugs beyond the original checklist: the app couldn't boot outside dev mode (Mongoose schema type-reflection crash on `Activity.metadata` and `User.role`), a cron job ran every 15s against a hardcoded fake email instead of daily against the real owner, JWT signing had a hardcoded fallback secret, the admin audit-log endpoint (`/api/activity`) had no auth guard at all, a routing bug shadowed `GET /pets/statistics` behind `GET /pets/:id`, and the test suite was 17/20 suites broken (fixed all — now 20/20 passing, lint and build both clean). Not verified in this sandbox (no Docker/MongoDB available): a full live boot + Swagger UI render against a real database — do this once before treating Phase 1 as fully closed in production. Also noted for later phases: the refresh-token flow (`RefreshTokenDto`, `REFRESH_SECRET`) is scaffolded but never implemented — belongs in Phase 3 or a dedicated auth-completion task, not silently assumed to work.
+- **2026-08-22** — Phase 2 (QR Tag Domain Correction) completed. Added a first-class `Tag` model (`src/modules/tags/`) with a real lifecycle (`MANUFACTURED/AVAILABLE/ASSIGNED/SUSPENDED/RETIRED`), assign/unassign endpoints keyed on the tag's public code (not an internal ID, since that's all a real user ever has), and admin inventory endpoints. Removed `Pet.publicId`/`Pet.qrCode` entirely in favor of the Tag model; moved QR image generation from pet-creation time to tag-creation time (a real architectural fix — the physical sticker's image must stay valid across reassignment). Replaced the public lookup route (`/public/pets/:publicId` → `/public/tags/:publicCode`) and fixed a regression the field removal would otherwise have caused in the public lost-pets listing. Chose a clean break over a migration script (no production data exists yet) and documented why the QR payload points at this API directly rather than the spec's literal `/t/{code}` path (no frontend project exists in this repo yet). Verified the entire module graph's decorators load without error via `node -e "require('./dist/app.module.js')"` — a network-independent check. `npm run lint`/`build`/`test` all pass clean (22/22 suites). Still carried forward from Phase 1: live DB-connected boot and `/api/docs` in a browser remain unverified — this sandbox has no network egress at all.
+- **2026-08-22** — Added Phase 10 (Pet Dating & Companion Matching) as a planned, not-yet-started phase, plus a companion PWA-first frontend blueprint (`PAWTATO_FRONTEND_BLUEPRINT.md`) — both requested directly by the user, not derived from the original spec. Scoped as: each pet's dating profile declares its own purpose (playdate, breeding, or both), swipe-to-match, lightweight in-app messaging, species-only matching, coarse location only pre-match. No implementation yet — planning only.
+- **2026-08-23** — Phase 3 (Lost & Found Flow Completion) completed. Added `ScanEvent` (`src/modules/scans/`) and `FoundReport` (`src/modules/found-reports/`) as first-class, queryable records; the public found-report endpoint requires no account and notifies the owner by email. Fixed two bugs caught before shipping: the endpoint was about to leak the pet's/tag's internal Mongo IDs to the public finder via a raw document response (now returns a sanitized confirmation), and an email failure would have turned a successfully-saved report into a 500 for the finder (now caught and logged, doesn't affect the response). Deliberately deferred "pet marked lost → notify owner" to Phase 4 after tracing the actual module import graph and finding it would require a real circular dependency (`PetsModule → NotificationsModule → VaccinationsModule → PetsModule`) to do directly — exactly the coupling problem Phase 4's event bus exists to solve. Separately, found and fixed a severe pre-existing bug unrelated to this phase's own scope: `UsersModule` never registered the `Pet` Mongoose model that `UsersService` depends on, which would have crashed the app on every real boot (`AuthModule` depends on `UsersModule`). Built a new permanent, network-independent verification test (`src/app.di-check.spec.ts`) that compiles the entire real `AppModule` dependency graph against a faked Mongoose connection — proved the bug, then proved the fix, and now runs in CI on every push to catch this whole class of issue automatically going forward. `npm run lint`/`build`/`test` all pass clean (27/27 suites). Live network/DB connection and `/api/docs` in a browser remain the one open item, still unverified in this sandbox — lower residual risk now that the full DI graph is proven to resolve.

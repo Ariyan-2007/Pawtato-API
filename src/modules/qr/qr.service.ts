@@ -8,7 +8,8 @@ import * as path from 'path';
 export class QrService {
   constructor(private readonly configService: ConfigService) {}
 
-  async generate(publicId: string) {
+  // Called once at tag creation; the image stays valid across reassignment since scans resolve tag -> current pet dynamically.
+  async generate(publicCode: string) {
     const folder = path.join(process.cwd(), 'uploads', 'qrcodes');
 
     if (!fs.existsSync(folder)) {
@@ -17,12 +18,12 @@ export class QrService {
       });
     }
 
-    const filename = `${publicId}.png`;
+    const filename = `${publicCode}.png`;
 
     const filepath = path.join(folder, filename);
 
     const appUrl = this.configService.get<string>('app.url');
-    const qrUrl = `${appUrl}/api/public/pets/${publicId}`;
+    const qrUrl = `${appUrl}/api/public/tags/${publicCode}`;
 
     await QRCode.toFile(filepath, qrUrl, {
       width: 400,

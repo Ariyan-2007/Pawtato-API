@@ -12,6 +12,9 @@ import { UsersModule } from './modules/users/users.module';
 import { PetsModule } from './modules/pets/pets.module';
 import { PublicModule } from './modules/public/public.module';
 import { QrModule } from './modules/qr/qr.module';
+import { TagsModule } from './modules/tags/tags.module';
+import { ScansModule } from './modules/scans/scans.module';
+import { FoundReportsModule } from './modules/found-reports/found-reports.module';
 import { ServeStaticModule } from '@nestjs/serve-static';
 import { join } from 'path';
 import { MedicalModule } from './modules/medical/medical.module';
@@ -49,6 +52,11 @@ import { ActivityModule } from './modules/activity/activity.module';
         ttl: 60_000,
         limit: 20,
       },
+      {
+        name: 'write',
+        ttl: 60_000,
+        limit: 5,
+      },
     ]),
 
     DatabaseModule,
@@ -64,6 +72,12 @@ import { ActivityModule } from './modules/activity/activity.module';
     PublicModule,
 
     QrModule,
+
+    TagsModule,
+
+    ScansModule,
+
+    FoundReportsModule,
 
     MedicalModule,
 

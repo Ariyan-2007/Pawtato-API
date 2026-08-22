@@ -13,11 +13,6 @@ export class Pet {
     required: true,
   })
   owner!: Types.ObjectId;
-  @Prop({
-    unique: true,
-    index: true,
-  })
-  publicId!: string;
 
   @Prop({
     required: true,
@@ -55,11 +50,6 @@ export class Pet {
     default: '',
   })
   profileImage!: string;
-
-  @Prop({
-    default: '',
-  })
-  qrCode!: string;
 
   @Prop({
     default: false,

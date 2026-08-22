@@ -2,6 +2,9 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { getModelToken } from '@nestjs/mongoose';
 import { PublicService } from './public.service';
 import { Pet } from '../pets/schemas/pet.schema';
+import { Tag } from '../tags/schemas/tag.schema';
+import { ScansService } from '../scans/scans.service';
+import { FoundReportsService } from '../found-reports/found-reports.service';
 
 describe('PublicService', () => {
   let service: PublicService;
@@ -11,6 +14,9 @@ describe('PublicService', () => {
       providers: [
         PublicService,
         { provide: getModelToken(Pet.name), useValue: {} },
+        { provide: getModelToken(Tag.name), useValue: {} },
+        { provide: ScansService, useValue: {} },
+        { provide: FoundReportsService, useValue: {} },
       ],
     }).compile();
 
