@@ -1,7 +1,4 @@
-import {
-  Injectable,
-  NotFoundException,
-} from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { Pet, PetDocument } from '../pets/schemas/pet.schema';
@@ -13,30 +10,24 @@ export class PublicService {
     private readonly petModel: Model<PetDocument>,
   ) {}
 
-  async getPetProfile(
-    publicId: string,
-  ) {
+  async getPetProfile(publicId: string) {
     const pet = await this.petModel.findOneAndUpdate(
-    {
-    publicId,
-    },
-    {
-    $inc: {
-      scanCount: 1,
-     },
-    lastScannedAt: new Date(),
-   },
-    {
-    new: true,
-    },
-  );
-
-  
+      {
+        publicId,
+      },
+      {
+        $inc: {
+          scanCount: 1,
+        },
+        lastScannedAt: new Date(),
+      },
+      {
+        new: true,
+      },
+    );
 
     if (!pet) {
-      throw new NotFoundException(
-        'Pet not found',
-      );
+      throw new NotFoundException('Pet not found');
     }
     return {
       name: pet.name,
@@ -55,15 +46,15 @@ export class PublicService {
   }
 
   async getLostPets() {
-  return this.petModel
-    .find({
-      isLost: true,
-    })
-    .select(
-      'publicId name species breed profileImage lastSeenLocation reward lostDate',
-    )
-    .sort({
-      lostDate: -1,
-    });
-}
+    return this.petModel
+      .find({
+        isLost: true,
+      })
+      .select(
+        'publicId name species breed profileImage lastSeenLocation reward lostDate',
+      )
+      .sort({
+        lostDate: -1,
+      });
+  }
 }

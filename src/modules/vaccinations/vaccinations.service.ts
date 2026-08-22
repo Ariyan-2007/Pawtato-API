@@ -2,10 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 
-import {
-  Vaccination,
-  VaccinationDocument,
-} from './schemas/vaccination.schema';
+import { Vaccination, VaccinationDocument } from './schemas/vaccination.schema';
 
 import { CreateVaccinationDto } from './dto/create-vaccination.dto';
 
@@ -20,15 +17,8 @@ export class VaccinationsService {
     private readonly petsService: PetsService,
   ) {}
 
-  async create(
-    ownerId: string,
-    petId: string,
-    dto: CreateVaccinationDto,
-  ) {
-    await this.petsService.findOwnedPet(
-      ownerId,
-      petId,
-    );
+  async create(ownerId: string, petId: string, dto: CreateVaccinationDto) {
+    await this.petsService.findOwnedPet(ownerId, petId);
 
     return this.vaccinationModel.create({
       pet: petId,
@@ -36,14 +26,8 @@ export class VaccinationsService {
     });
   }
 
-  async findAll(
-    ownerId: string,
-    petId: string,
-  ) {
-    await this.petsService.findOwnedPet(
-      ownerId,
-      petId,
-    );
+  async findAll(ownerId: string, petId: string) {
+    await this.petsService.findOwnedPet(ownerId, petId);
 
     return this.vaccinationModel
       .find({
@@ -55,6 +39,6 @@ export class VaccinationsService {
   }
 
   async count(): Promise<number> {
-  return this.vaccinationModel.countDocuments();
- }
+    return this.vaccinationModel.countDocuments();
+  }
 }

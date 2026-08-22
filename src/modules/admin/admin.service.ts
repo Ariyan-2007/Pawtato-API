@@ -27,17 +27,13 @@ export class AdminService {
 
       recoveredPets: await this.petsService.countRecovered(),
 
-      totalVaccinations:
-        await this.vaccinationsService.count(),
+      totalVaccinations: await this.vaccinationsService.count(),
 
-      totalMedicalRecords:
-        await this.medicalService.count(),
+      totalMedicalRecords: await this.medicalService.count(),
     };
   }
 
-  async users(
-    query: AdminUserQueryDto,
-  ) {
+  async users(query: AdminUserQueryDto) {
     return this.usersService.findAll(query);
   }
 
@@ -53,67 +49,45 @@ export class AdminService {
     return this.usersService.unblockUser(id);
   }
 
-  async changeRole(
-    id: string,
-    role: UserRole,
-  ) {
-    return this.usersService.changeRole(
-      id,
-      role,
-    );
+  async changeRole(id: string, role: UserRole) {
+    return this.usersService.changeRole(id, role);
   }
 
   async delete(id: string) {
     return this.usersService.deleteUser(id);
   }
 
+  async pets(query: AdminPetQueryDto) {
+    return this.petsService.findAllAdmin(query);
+  }
 
-  async pets(
-  query: AdminPetQueryDto,
-) {
-  return this.petsService.findAllAdmin(
-    query,
-  );
-}
+  async pet(id: string) {
+    return this.petsService.findByIdAdmin(id);
+  }
 
+  async recoverPet(id: string) {
+    return this.petsService.recoverPet(id);
+  }
 
-async pet(id: string) {
-  return this.petsService.findByIdAdmin(id);
-}
+  async deletePet(id: string) {
+    return this.petsService.deletePet(id);
+  }
 
-async recoverPet(id: string) {
-  return this.petsService.recoverPet(id);
-}
+  async analytics() {
+    return {
+      monthlyUsers: await this.usersService.monthlyRegistrations(),
 
-async deletePet(id: string) {
-  return this.petsService.deletePet(id);
-}
+      monthlyPets: await this.petsService.monthlyRegistrations(),
 
-async analytics() {
-  return {
+      speciesDistribution: await this.petsService.speciesDistribution(),
 
-    monthlyUsers:
-      await this.usersService.monthlyRegistrations(),
+      lostVsRecovered: {
+        lost: await this.petsService.countLost(),
 
-    monthlyPets:
-      await this.petsService.monthlyRegistrations(),
+        recovered: await this.petsService.countRecovered(),
+      },
 
-    speciesDistribution:
-      await this.petsService.speciesDistribution(),
-
-    lostVsRecovered: {
-
-      lost:
-        await this.petsService.countLost(),
-
-      recovered:
-        await this.petsService.countRecovered(),
-
-    },
-
-    topScannedPets:
-      await this.petsService.topScannedPets(),
-
-  };
-}
+      topScannedPets: await this.petsService.topScannedPets(),
+    };
+  }
 }

@@ -20,11 +20,7 @@ export class MedicalService {
     private readonly petsService: PetsService,
   ) {}
 
-  async create(
-    ownerId: string,
-    petId: string,
-    dto: CreateMedicalRecordDto,
-  ) {
+  async create(ownerId: string, petId: string, dto: CreateMedicalRecordDto) {
     await this.petsService.findOwnedPet(ownerId, petId);
 
     return this.medicalModel.create({
@@ -33,10 +29,7 @@ export class MedicalService {
     });
   }
 
-  async findAll(
-    ownerId: string,
-    petId: string,
-  ) {
+  async findAll(ownerId: string, petId: string) {
     await this.petsService.findOwnedPet(ownerId, petId);
 
     return this.medicalModel

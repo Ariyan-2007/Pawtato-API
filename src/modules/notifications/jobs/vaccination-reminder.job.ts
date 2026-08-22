@@ -7,14 +7,18 @@ import {
   Vaccination,
   VaccinationDocument,
 } from '../../vaccinations/schemas/vaccination.schema';
+import { Pet } from '../../pets/schemas/pet.schema';
+import { User } from '../../users/schemas/user.schema';
 
 import { NotificationsService } from '../notifications.service';
 
+interface PopulatedVaccination extends Omit<VaccinationDocument, 'pet'> {
+  pet: Pet & { owner: User };
+}
+
 @Injectable()
 export class VaccinationReminderJob {
-  private readonly logger = new Logger(
-    VaccinationReminderJob.name,
-  );
+  private readonly logger = new Logger(VaccinationReminderJob.name);
 
   constructor(
     @InjectModel(Vaccination.name)
@@ -23,8 +27,7 @@ export class VaccinationReminderJob {
     private readonly notificationsService: NotificationsService,
   ) {}
 
-  // Change to @Cron('0 9 * * *') when finished testing
-  @Cron('*/15 * * * * *')
+  @Cron('0 9 * * *')
   async handleCron() {
     this.logger.log('Checking upcoming vaccinations...');
 
@@ -33,23 +36,35 @@ export class VaccinationReminderJob {
     const nextWeek = new Date();
     nextWeek.setDate(today.getDate() + 7);
 
-    const vaccinations = await this.vaccinationModel.find({
-      reminderSent: false,
-      nextDueDate: {
-        $gte: today,
-        $lte: nextWeek,
-      },
-    });
+    const vaccinations = (await this.vaccinationModel
+      .find({
+        reminderSent: false,
+        nextDueDate: {
+          $gte: today,
+          $lte: nextWeek,
+        },
+      })
+      .populate({
+        path: 'pet',
+        populate: { path: 'owner' },
+      })) as unknown as PopulatedVaccination[];
 
-    this.logger.log(
-      `Found ${vaccinations.length} upcoming vaccinations.`,
-    );
+    this.logger.log(`Found ${vaccinations.length} upcoming vaccinations.`);
 
     for (const vaccination of vaccinations) {
-      this.notificationsService.sendEmail(
-        'demo@pawtato.com',
+      const ownerEmail = vaccination.pet?.owner?.email;
+
+      if (!ownerEmail) {
+        this.logger.warn(
+          `Skipping reminder for vaccination ${String(vaccination._id)}: no owner email found.`,
+        );
+        continue;
+      }
+
+      await this.notificationsService.sendEmail(
+        ownerEmail,
         'Vaccination Reminder',
-        `Your pet vaccination "${vaccination.vaccineName}" is due on ${vaccination.nextDueDate.toDateString()}.`,
+        `Your pet's vaccination "${vaccination.vaccineName}" is due on ${vaccination.nextDueDate.toDateString()}.`,
       );
 
       vaccination.reminderSent = true;
@@ -57,9 +72,7 @@ export class VaccinationReminderJob {
 
       await vaccination.save();
 
-      this.logger.log(
-        `Reminder sent for vaccine: ${vaccination.vaccineName}`,
-      );
+      this.logger.log(`Reminder sent for vaccine: ${vaccination.vaccineName}`);
     }
   }
 }

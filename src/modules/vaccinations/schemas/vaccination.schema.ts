@@ -1,8 +1,7 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Types } from 'mongoose';
 
-export type VaccinationDocument =
-  HydratedDocument<Vaccination>;
+export type VaccinationDocument = HydratedDocument<Vaccination>;
 
 @Schema({
   timestamps: true,
@@ -12,11 +11,11 @@ export class Vaccination {
     type: Types.ObjectId,
     ref: 'Pet',
     required: true,
-    })
-   pet!: Types.ObjectId;
+  })
+  pet!: Types.ObjectId;
   @Prop({
     default: false,
-   })
+  })
   reminderSent!: boolean;
 
   @Prop()
@@ -47,5 +46,4 @@ export class Vaccination {
   notes?: string;
 }
 
-export const VaccinationSchema =
-  SchemaFactory.createForClass(Vaccination);
+export const VaccinationSchema = SchemaFactory.createForClass(Vaccination);

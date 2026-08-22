@@ -14,9 +14,9 @@ export class Pet {
   })
   owner!: Types.ObjectId;
   @Prop({
-   unique: true,
-   index: true,
-   })
+    unique: true,
+    index: true,
+  })
   publicId!: string;
 
   @Prop({
@@ -63,7 +63,7 @@ export class Pet {
 
   @Prop({
     default: false,
-   })
+  })
   isLost!: boolean;
 
   @Prop()
@@ -81,16 +81,13 @@ export class Pet {
   @Prop()
   emergencyContact?: string;
 
-
-
   @Prop({
     default: 0,
-   })
+  })
   scanCount!: number;
 
-   @Prop()
+  @Prop()
   lastScannedAt?: Date;
-  
 }
 
 export const PetSchema = SchemaFactory.createForClass(Pet);

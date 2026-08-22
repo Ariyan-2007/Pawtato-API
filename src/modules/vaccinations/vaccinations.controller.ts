@@ -1,14 +1,10 @@
-import {
-  Body,
-  Controller,
-  Get,
-  Param,
-  Post,
-  UseGuards,
-} from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
 
 import {
   ApiBearerAuth,
+  ApiOperation,
+  ApiParam,
+  ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
 
@@ -24,10 +20,15 @@ import { CreateVaccinationDto } from './dto/create-vaccination.dto';
 @UseGuards(JwtAuthGuard)
 @Controller('pets/:petId/vaccinations')
 export class VaccinationsController {
-  constructor(
-    private readonly vaccinationsService: VaccinationsService,
-  ) {}
+  constructor(private readonly vaccinationsService: VaccinationsService) {}
 
+  @ApiOperation({ summary: 'Add a vaccination record to a pet' })
+  @ApiParam({ name: 'petId', description: 'Pet ID' })
+  @ApiResponse({ status: 201, description: 'Vaccination record created.' })
+  @ApiResponse({
+    status: 404,
+    description: 'Pet not found or not owned by the caller.',
+  })
   @Post()
   create(
     @CurrentUser() user: JwtPayload,
@@ -38,13 +39,16 @@ export class VaccinationsController {
     @Body()
     dto: CreateVaccinationDto,
   ) {
-    return this.vaccinationsService.create(
-      user.sub,
-      petId,
-      dto,
-    );
+    return this.vaccinationsService.create(user.sub, petId, dto);
   }
 
+  @ApiOperation({ summary: "List a pet's vaccination records" })
+  @ApiParam({ name: 'petId', description: 'Pet ID' })
+  @ApiResponse({ status: 200, description: 'Array of vaccination records.' })
+  @ApiResponse({
+    status: 404,
+    description: 'Pet not found or not owned by the caller.',
+  })
   @Get()
   findAll(
     @CurrentUser() user: JwtPayload,
@@ -52,9 +56,6 @@ export class VaccinationsController {
     @Param('petId')
     petId: string,
   ) {
-    return this.vaccinationsService.findAll(
-      user.sub,
-      petId,
-    );
+    return this.vaccinationsService.findAll(user.sub, petId);
   }
 }

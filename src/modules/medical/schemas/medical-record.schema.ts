@@ -38,5 +38,4 @@ export class MedicalRecord {
   notes?: string;
 }
 
-export const MedicalRecordSchema =
-  SchemaFactory.createForClass(MedicalRecord);
+export const MedicalRecordSchema = SchemaFactory.createForClass(MedicalRecord);

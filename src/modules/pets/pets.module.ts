@@ -20,9 +20,6 @@ import { Pet, PetSchema } from './schemas/pet.schema';
 
   providers: [PetsService],
 
-  exports: [
-    MongooseModule,
-    PetsService,
-  ],
+  exports: [MongooseModule, PetsService],
 })
 export class PetsModule {}
