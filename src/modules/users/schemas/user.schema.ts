@@ -29,6 +29,21 @@ export class User {
   password!: string;
 
   @Prop({
+    default: '',
+  })
+  phone!: string;
+
+  @Prop({
+    default: '',
+  })
+  address!: string;
+
+  @Prop({
+    default: '',
+  })
+  avatar!: string;
+
+  @Prop({
     default: UserRole.USER,
     enum: UserRole,
   })
