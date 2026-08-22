@@ -1,22 +1,13 @@
-import {
-  Prop,
-  Schema,
-  SchemaFactory,
-} from '@nestjs/mongoose';
+import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 
-import {
-  HydratedDocument,
-  Types,
-} from 'mongoose';
+import { HydratedDocument, Schema as MongooseSchema, Types } from 'mongoose';
 
-export type ActivityDocument =
-  HydratedDocument<Activity>;
+export type ActivityDocument = HydratedDocument<Activity>;
 
 @Schema({
   timestamps: true,
 })
 export class Activity {
-
   @Prop({
     type: Types.ObjectId,
     ref: 'User',
@@ -34,10 +25,10 @@ export class Activity {
   target!: string;
 
   @Prop({
+    type: MongooseSchema.Types.Mixed,
     default: {},
   })
   metadata!: Record<string, any>;
 }
 
-export const ActivitySchema =
-  SchemaFactory.createForClass(Activity);
+export const ActivitySchema = SchemaFactory.createForClass(Activity);

@@ -44,6 +44,7 @@ export class User {
   avatar!: string;
 
   @Prop({
+    type: String,
     default: UserRole.USER,
     enum: UserRole,
   })

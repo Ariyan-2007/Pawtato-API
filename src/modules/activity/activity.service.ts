@@ -3,10 +3,7 @@ import { InjectModel } from '@nestjs/mongoose';
 
 import { Model } from 'mongoose';
 
-import {
-  Activity,
-  ActivityDocument,
-} from './schemas/activity.schema';
+import { Activity, ActivityDocument } from './schemas/activity.schema';
 
 @Injectable()
 export class ActivityService {
@@ -30,14 +27,8 @@ export class ActivityService {
   }
 
   async findAll() {
-    return this.activityModel
-      .find()
-      .populate(
-        'admin',
-        'fullName email',
-      )
-      .sort({
-        createdAt: -1,
-      });
+    return this.activityModel.find().populate('admin', 'fullName email').sort({
+      createdAt: -1,
+    });
   }
 }

@@ -4,10 +4,7 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { ActivityService } from './activity.service';
 import { ActivityController } from './activity.controller';
 
-import {
-  Activity,
-  ActivitySchema,
-} from './schemas/activity.schema';
+import { Activity, ActivitySchema } from './schemas/activity.schema';
 
 @Module({
   imports: [
@@ -19,16 +16,10 @@ import {
     ]),
   ],
 
-  controllers: [
-    ActivityController,
-  ],
+  controllers: [ActivityController],
 
-  providers: [
-    ActivityService,
-  ],
+  providers: [ActivityService],
 
-  exports: [
-    ActivityService,
-  ],
+  exports: [ActivityService],
 })
 export class ActivityModule {}
