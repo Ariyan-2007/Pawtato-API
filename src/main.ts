@@ -105,4 +105,11 @@ async function bootstrap() {
   console.log(`📚 Swagger Docs: ${appUrl}/${apiPrefix}/docs`);
 }
 
-void bootstrap();
+bootstrap().catch((error: unknown) => {
+  // Ensures a crash during boot (bad env config, unreachable MongoDB, etc.)
+  // always prints a clear, complete error before exiting, instead of relying
+  // on Node's default unhandled-rejection formatting — which is what makes
+  // failures like this hard to diagnose from a platform's build/deploy log.
+  console.error('Fatal error during application bootstrap:', error);
+  process.exit(1);
+});

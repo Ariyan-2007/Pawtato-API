@@ -1,7 +1,9 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { MailerModule } from '@nestjs-modules/mailer';
+import { HandlebarsAdapter } from '@nestjs-modules/mailer/adapters/handlebars.adapter';
 import { MongooseModule } from '@nestjs/mongoose';
+import { join } from 'path';
 
 import { NotificationsController } from './notifications.controller';
 import { NotificationsService } from './notifications.service';
@@ -40,6 +42,16 @@ import { VaccinationsModule } from '../vaccinations/vaccinations.module';
         },
         defaults: {
           from: configService.get<string>('mail.from'),
+        },
+        template: {
+          // Copied from src/mail/templates -> dist/mail/templates at build
+          // time (see nest-cli.json's compilerOptions.assets); __dirname
+          // here resolves to dist/modules/notifications at runtime.
+          dir: join(__dirname, '..', '..', 'mail', 'templates'),
+          adapter: new HandlebarsAdapter(),
+          options: {
+            strict: true,
+          },
         },
       }),
     }),

@@ -4,6 +4,9 @@ export default () => ({
     environment: process.env.NODE_ENV || 'development',
     apiPrefix: process.env.API_PREFIX || 'api',
     url: process.env.APP_URL || 'http://localhost:5000',
+    // Where users land after clicking a link from a transactional email
+    // (verify/reset) — the frontend app, not this API.
+    frontendUrl: process.env.FRONTEND_URL || 'http://localhost:3000',
     corsOrigins: (process.env.CORS_ORIGINS || '')
       .split(',')
       .map((origin) => origin.trim())

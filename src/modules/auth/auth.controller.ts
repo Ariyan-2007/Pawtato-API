@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  Headers,
   HttpCode,
   HttpStatus,
   Post,
@@ -33,7 +34,7 @@ export class AuthController {
   @ApiOperation({
     summary: 'Register a new Pawtato account',
     description:
-      'Creates the account and sends a 6-digit email verification code. ' +
+      'Creates the account and emails a verification link (valid 24 hours). ' +
       'The returned access token is usable immediately regardless of verification status.',
   })
   @ApiResponse({
@@ -72,13 +73,14 @@ export class AuthController {
   }
 
   @ApiOperation({
-    summary:
-      'Verify an email address using the 6-digit code sent at registration',
+    summary: 'Verify an email address using the token from the verify link',
+    description:
+      'Called by the frontend page at FRONTEND_URL/verify?token=... with the token from the query string.',
   })
   @ApiResponse({ status: 200, description: 'Email verified successfully.' })
   @ApiResponse({
     status: 400,
-    description: 'Invalid or expired verification code.',
+    description: 'Invalid or expired verification link.',
   })
   @HttpCode(HttpStatus.OK)
   @Post('verify-email')
@@ -86,7 +88,7 @@ export class AuthController {
     return this.authService.verifyEmail(dto);
   }
 
-  @ApiOperation({ summary: 'Resend the email verification code' })
+  @ApiOperation({ summary: 'Resend the email verification link' })
   @ApiResponse({
     status: 200,
     description:
@@ -99,7 +101,7 @@ export class AuthController {
     return this.authService.resendVerification(dto);
   }
 
-  @ApiOperation({ summary: 'Request a password reset code by email' })
+  @ApiOperation({ summary: 'Request a password reset link by email' })
   @ApiResponse({
     status: 200,
     description:
@@ -108,19 +110,29 @@ export class AuthController {
   @Throttle({ write: { limit: 5, ttl: 60_000 } })
   @HttpCode(HttpStatus.OK)
   @Post('forgot-password')
-  forgotPassword(@Body() dto: ForgotPasswordDto) {
-    return this.authService.forgotPassword(dto);
+  forgotPassword(
+    @Body() dto: ForgotPasswordDto,
+    @Headers('user-agent') userAgent?: string,
+  ) {
+    return this.authService.forgotPassword(dto, userAgent);
   }
 
   @ApiOperation({
-    summary: 'Reset a password using the 6-digit code sent by forgot-password',
+    summary:
+      'Reset a password using the token from the reset link sent by forgot-password',
+    description:
+      'Called by the frontend page at FRONTEND_URL/reset?token=... with the token from the query string. ' +
+      'On success, every existing session (JWT issued before this change) is invalidated and a receipt email is sent.',
   })
   @ApiResponse({ status: 200, description: 'Password reset successfully.' })
-  @ApiResponse({ status: 400, description: 'Invalid or expired reset code.' })
+  @ApiResponse({ status: 400, description: 'Invalid or expired reset link.' })
   @Throttle({ write: { limit: 5, ttl: 60_000 } })
   @HttpCode(HttpStatus.OK)
   @Post('reset-password')
-  resetPassword(@Body() dto: ResetPasswordDto) {
-    return this.authService.resetPassword(dto);
+  resetPassword(
+    @Body() dto: ResetPasswordDto,
+    @Headers('user-agent') userAgent?: string,
+  ) {
+    return this.authService.resetPassword(dto, userAgent);
   }
 }

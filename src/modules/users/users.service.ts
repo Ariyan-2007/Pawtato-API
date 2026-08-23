@@ -53,19 +53,19 @@ export class UsersService {
     return this.userModel.findOne({ email }).select('+password');
   }
 
-  async findByEmailWithVerificationCode(email: string) {
+  async findByVerificationTokenHash(tokenHash: string) {
     return this.userModel
-      .findOne({ email })
-      .select('+emailVerificationCodeHash');
+      .findOne({ emailVerificationTokenHash: tokenHash })
+      .select('+emailVerificationTokenHash');
   }
 
-  async setEmailVerificationCode(
+  async setEmailVerificationToken(
     userId: string,
-    codeHash: string,
+    tokenHash: string,
     expiresAt: Date,
   ) {
     return this.userModel.findByIdAndUpdate(userId, {
-      emailVerificationCodeHash: codeHash,
+      emailVerificationTokenHash: tokenHash,
       emailVerificationExpiresAt: expiresAt,
     });
   }
@@ -76,7 +76,7 @@ export class UsersService {
         userId,
         {
           isEmailVerified: true,
-          emailVerificationCodeHash: null,
+          emailVerificationTokenHash: null,
           emailVerificationExpiresAt: null,
         },
         { new: true },
@@ -84,27 +84,40 @@ export class UsersService {
       .select('-password');
   }
 
-  async findByEmailWithResetCode(email: string) {
-    return this.userModel.findOne({ email }).select('+passwordResetCodeHash');
+  async findByResetTokenHash(tokenHash: string) {
+    return this.userModel
+      .findOne({ passwordResetTokenHash: tokenHash })
+      .select('+passwordResetTokenHash');
   }
 
-  async setPasswordResetCode(
+  async setPasswordResetToken(
     userId: string,
-    codeHash: string,
+    tokenHash: string,
     expiresAt: Date,
   ) {
     return this.userModel.findByIdAndUpdate(userId, {
-      passwordResetCodeHash: codeHash,
+      passwordResetTokenHash: tokenHash,
       passwordResetExpiresAt: expiresAt,
     });
   }
 
   async resetPassword(userId: string, hashedPassword: string) {
-    return this.userModel.findByIdAndUpdate(userId, {
+    const changedAt = new Date();
+
+    await this.userModel.findByIdAndUpdate(userId, {
       password: hashedPassword,
-      passwordResetCodeHash: null,
+      passwordResetTokenHash: null,
       passwordResetExpiresAt: null,
+      passwordChangedAt: changedAt,
     });
+
+    return changedAt;
+  }
+
+  // Lean lookup used on every authenticated request (JwtStrategy) — only the
+  // fields needed to decide whether a JWT is still valid.
+  async findAuthState(userId: string) {
+    return this.userModel.findById(userId).select('isActive passwordChangedAt');
   }
 
   async getProfile(userId: string) {
