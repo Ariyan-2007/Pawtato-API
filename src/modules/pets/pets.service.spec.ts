@@ -4,14 +4,20 @@ import { getModelToken } from '@nestjs/mongoose';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PetsService } from './pets.service';
 import { Pet } from './schemas/pet.schema';
+import { STORAGE_PROVIDER } from '../storage/storage.constants';
 
 describe('PetsService', () => {
   let service: PetsService;
-  let petModel: { findOneAndUpdate: jest.Mock };
+  let petModel: { findOneAndUpdate: jest.Mock; findOne: jest.Mock };
+  let storageProvider: { deleteByUrl: jest.Mock };
 
   beforeEach(async () => {
     petModel = {
       findOneAndUpdate: jest.fn(),
+      findOne: jest.fn(),
+    };
+    storageProvider = {
+      deleteByUrl: jest.fn(),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -19,6 +25,7 @@ describe('PetsService', () => {
         PetsService,
         { provide: getModelToken(Pet.name), useValue: petModel },
         { provide: EventEmitter2, useValue: {} },
+        { provide: STORAGE_PROVIDER, useValue: storageProvider },
       ],
     }).compile();
 
@@ -34,6 +41,11 @@ describe('PetsService', () => {
     const petId = '507f191e810c19729de860ea';
 
     it('scopes the update to the pet owned by the caller', async () => {
+      petModel.findOne.mockReturnValue({
+        select: jest
+          .fn()
+          .mockResolvedValue({ profileImage: '/uploads/pets/old.png' }),
+      });
       petModel.findOneAndUpdate.mockResolvedValue({
         profileImage: '/uploads/pets/photo.png',
       });
@@ -45,10 +57,15 @@ describe('PetsService', () => {
         { profileImage: '/uploads/pets/photo.png' },
         { new: true },
       );
+      expect(storageProvider.deleteByUrl).toHaveBeenCalledWith(
+        '/uploads/pets/old.png',
+      );
     });
 
     it('throws NotFoundException when the pet is not owned by the caller', async () => {
-      petModel.findOneAndUpdate.mockResolvedValue(null);
+      petModel.findOne.mockReturnValue({
+        select: jest.fn().mockResolvedValue(null),
+      });
 
       await expect(
         service.updatePhoto(ownerId, petId, '/uploads/pets/photo.png'),

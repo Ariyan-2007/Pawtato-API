@@ -10,6 +10,7 @@ import { UsersService } from './users.service';
 import { User } from './schemas/user.schema';
 import { Pet } from '../pets/schemas/pet.schema';
 import { AccountStatus } from '../../common/enums/account-status.enum';
+import { STORAGE_PROVIDER } from '../storage/storage.constants';
 
 describe('UsersService', () => {
   let service: UsersService;
@@ -31,6 +32,7 @@ describe('UsersService', () => {
         UsersService,
         { provide: getModelToken(User.name), useValue: userModel },
         { provide: getModelToken(Pet.name), useValue: {} },
+        { provide: STORAGE_PROVIDER, useValue: {} },
       ],
     }).compile();
 
