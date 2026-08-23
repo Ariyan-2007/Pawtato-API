@@ -1,9 +1,9 @@
 import {
-  BadRequestException,
   Body,
   Controller,
   Get,
   Headers,
+  Inject,
   Param,
   Post,
   UploadedFile,
@@ -19,18 +19,25 @@ import {
 } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { diskStorage } from 'multer';
-import { extname } from 'path';
 
 import { PublicService } from './public.service';
 import { CreateFoundReportDto } from '../found-reports/dto/create-found-report.dto';
-
-const ALLOWED_PHOTO_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
+import {
+  imageFileFilter,
+  MAX_IMAGE_SIZE_BYTES,
+  STORAGE_PROVIDER,
+} from '../storage/storage.constants';
+import type { StorageProvider } from '../storage/interfaces/storage-provider.interface';
 
 @ApiTags('Public')
 @Controller('public')
 export class PublicController {
-  constructor(private readonly publicService: PublicService) {}
+  constructor(
+    private readonly publicService: PublicService,
+
+    @Inject(STORAGE_PROVIDER)
+    private readonly storageProvider: StorageProvider,
+  ) {}
 
   @ApiOperation({
     summary: "Get a pet's public profile by its tag's public code",
@@ -108,28 +115,8 @@ export class PublicController {
   @Post('tags/:publicCode/found-report')
   @UseInterceptors(
     FileInterceptor('photo', {
-      storage: diskStorage({
-        destination: './uploads/found-reports',
-        filename: (req, file, callback) => {
-          const uniqueName = Date.now() + '-' + Math.round(Math.random() * 1e9);
-
-          callback(null, uniqueName + extname(file.originalname));
-        },
-      }),
-      limits: {
-        fileSize: 5 * 1024 * 1024,
-      },
-      fileFilter: (req, file, callback) => {
-        if (!ALLOWED_PHOTO_MIME_TYPES.includes(file.mimetype)) {
-          callback(
-            new BadRequestException('Photo must be a JPEG, PNG, or WebP image'),
-            false,
-          );
-          return;
-        }
-
-        callback(null, true);
-      },
+      limits: { fileSize: MAX_IMAGE_SIZE_BYTES },
+      fileFilter: imageFileFilter,
     }),
   )
   async submitFoundReport(
@@ -142,9 +129,18 @@ export class PublicController {
     @UploadedFile()
     file?: Express.Multer.File,
   ) {
-    const photoUrl = file
-      ? `/uploads/found-reports/${file.filename}`
-      : undefined;
+    let photoUrl: string | undefined;
+
+    if (file) {
+      const key = await this.storageProvider.upload({
+        buffer: file.buffer,
+        folder: 'found-reports',
+        originalName: file.originalname,
+        mimetype: file.mimetype,
+      });
+
+      photoUrl = this.storageProvider.getUrl(key);
+    }
 
     return this.publicService.submitFoundReport(publicCode, dto, photoUrl);
   }

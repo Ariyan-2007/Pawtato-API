@@ -24,6 +24,7 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
 import { ScheduleModule } from '@nestjs/schedule';
 import { AdminModule } from './modules/admin/admin.module';
 import { ActivityModule } from './modules/activity/activity.module';
+import { StorageModule } from './modules/storage/storage.module';
 
 @Module({
   imports: [
@@ -60,6 +61,8 @@ import { ActivityModule } from './modules/activity/activity.module';
         limit: 5,
       },
     ]),
+
+    StorageModule,
 
     DatabaseModule,
 

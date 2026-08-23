@@ -70,6 +70,23 @@ export class PetsService {
     return pet;
   }
 
+  async updatePhoto(ownerId: string, petId: string, profileImage: string) {
+    const pet = await this.petModel.findOneAndUpdate(
+      {
+        _id: petId,
+        owner: new Types.ObjectId(ownerId),
+      },
+      { profileImage },
+      { new: true },
+    );
+
+    if (!pet) {
+      throw new NotFoundException('Pet not found');
+    }
+
+    return pet;
+  }
+
   async remove(ownerId: string, petId: string) {
     const pet = await this.petModel.findOneAndDelete({
       _id: petId,

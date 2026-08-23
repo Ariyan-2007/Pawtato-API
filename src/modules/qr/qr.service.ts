@@ -1,34 +1,38 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as QRCode from 'qrcode';
-import * as fs from 'fs';
-import * as path from 'path';
+
+import { STORAGE_PROVIDER } from '../storage/storage.constants';
+import type { StorageProvider } from '../storage/interfaces/storage-provider.interface';
 
 @Injectable()
 export class QrService {
-  constructor(private readonly configService: ConfigService) {}
+  constructor(
+    private readonly configService: ConfigService,
+
+    @Inject(STORAGE_PROVIDER)
+    private readonly storageProvider: StorageProvider,
+  ) {}
 
   // Called once at tag creation; the image stays valid across reassignment since scans resolve tag -> current pet dynamically.
   async generate(publicCode: string) {
-    const folder = path.join(process.cwd(), 'uploads', 'qrcodes');
-
-    if (!fs.existsSync(folder)) {
-      fs.mkdirSync(folder, {
-        recursive: true,
-      });
-    }
-
-    const filename = `${publicCode}.png`;
-
-    const filepath = path.join(folder, filename);
-
     const appUrl = this.configService.get<string>('app.url');
     const qrUrl = `${appUrl}/api/public/tags/${publicCode}`;
 
-    await QRCode.toFile(filepath, qrUrl, {
+    const buffer = await QRCode.toBuffer(qrUrl, {
       width: 400,
     });
 
-    return `/uploads/qrcodes/${filename}`;
+    const filename = `${publicCode}.png`;
+
+    const key = await this.storageProvider.upload({
+      buffer,
+      folder: 'qrcodes',
+      originalName: filename,
+      mimetype: 'image/png',
+      filename,
+    });
+
+    return this.storageProvider.getUrl(key);
   }
 }

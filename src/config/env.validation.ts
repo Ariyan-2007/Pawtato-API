@@ -21,4 +21,29 @@ export const envValidationSchema = Joi.object({
   MAIL_USER: Joi.string().optional(),
   MAIL_PASSWORD: Joi.string().optional(),
   MAIL_FROM: Joi.string().optional(),
+
+  STORAGE_PROVIDER: Joi.string().valid('local', 's3').default('local'),
+  S3_BUCKET: Joi.string().when('STORAGE_PROVIDER', {
+    is: 's3',
+    then: Joi.required(),
+    otherwise: Joi.optional(),
+  }),
+  S3_REGION: Joi.string().when('STORAGE_PROVIDER', {
+    is: 's3',
+    then: Joi.required(),
+    otherwise: Joi.optional(),
+  }),
+  S3_ENDPOINT: Joi.string().uri().optional(),
+  S3_ACCESS_KEY_ID: Joi.string().when('STORAGE_PROVIDER', {
+    is: 's3',
+    then: Joi.required(),
+    otherwise: Joi.optional(),
+  }),
+  S3_SECRET_ACCESS_KEY: Joi.string().when('STORAGE_PROVIDER', {
+    is: 's3',
+    then: Joi.required(),
+    otherwise: Joi.optional(),
+  }),
+  S3_PUBLIC_URL: Joi.string().uri().optional(),
+  S3_FORCE_PATH_STYLE: Joi.string().valid('true', 'false').optional(),
 });
