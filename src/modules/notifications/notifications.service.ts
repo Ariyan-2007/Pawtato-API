@@ -8,6 +8,7 @@ import {
   NotificationDocument,
 } from './schemas/notification.schema';
 import { NotificationQueryDto } from './dto/notification-query.dto';
+import { renderPlainTextTemplate } from '../../mail/mail-template.util';
 
 @Injectable()
 export class NotificationsService {
@@ -33,6 +34,26 @@ export class NotificationsService {
           Pawtato Pet Management System
         </small>
       `,
+    });
+
+    return true;
+  }
+
+  // Renders a named .hbs template (via MailerModule's HandlebarsAdapter) for
+  // the HTML body, plus its .txt sibling for the plain-text alternative —
+  // used by the auth flows (verify-email, forgot-password, password-reset).
+  async sendTemplateEmail(
+    to: string,
+    subject: string,
+    template: string,
+    context: Record<string, unknown>,
+  ) {
+    await this.mailerService.sendMail({
+      to,
+      subject,
+      template,
+      context,
+      text: renderPlainTextTemplate(template, context),
     });
 
     return true;

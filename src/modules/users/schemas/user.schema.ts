@@ -60,21 +60,33 @@ export class User {
   })
   isEmailVerified!: boolean;
 
+  // SHA-256 hash of the emailed verification token (not bcrypt — this needs
+  // to be looked up directly by value, since the magic link carries only the
+  // token, not the user's email; bcrypt's random salting makes that kind of
+  // lookup impossible).
   @Prop({
     select: false,
+    index: true,
   })
-  emailVerificationCodeHash?: string;
+  emailVerificationTokenHash?: string;
 
   @Prop()
   emailVerificationExpiresAt?: Date;
 
   @Prop({
     select: false,
+    index: true,
   })
-  passwordResetCodeHash?: string;
+  passwordResetTokenHash?: string;
 
   @Prop()
   passwordResetExpiresAt?: Date;
+
+  // Any JWT issued before this timestamp is rejected by JwtStrategy — this is
+  // what makes the password-reset email's "every other device has been
+  // signed out" claim actually true despite JWTs otherwise being stateless.
+  @Prop()
+  passwordChangedAt?: Date;
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);

@@ -5,6 +5,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 
+import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 
 import * as bcrypt from 'bcrypt';
@@ -18,16 +19,20 @@ import { VerifyEmailDto } from './dto/verify-email.dto';
 import { ResendVerificationDto } from './dto/resend-verification.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
-import { generateOtp } from './utils/otp.util';
+import { generateToken, hashToken } from './utils/token.util';
+import { describeUserAgent } from './utils/user-agent.util';
+import { formatDhakaDateTime } from './utils/date.util';
+import { extractEmailAddress } from '../../mail/mail-address.util';
 
-const EMAIL_VERIFICATION_TTL_MS = 10 * 60 * 1000; // 10 minutes
-const PASSWORD_RESET_TTL_MS = 15 * 60 * 1000; // 15 minutes
-const OTP_HASH_ROUNDS = 10;
+const EMAIL_VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const EMAIL_VERIFICATION_TTL_LABEL = '24 hours';
+const PASSWORD_RESET_TTL_MS = 60 * 60 * 1000; // 1 hour
+const PASSWORD_RESET_TTL_LABEL = '1 hour';
 
 const GENERIC_RESET_MESSAGE =
-  'If that email is registered, a password reset code has been sent.';
+  'If that email is registered, a password reset link has been sent.';
 const GENERIC_RESEND_MESSAGE =
-  'If that account exists and is unverified, a new verification code has been sent.';
+  'If that account exists and is unverified, a new verification link has been sent.';
 
 @Injectable()
 export class AuthService {
@@ -36,18 +41,19 @@ export class AuthService {
   constructor(
     private readonly usersService: UsersService,
     private readonly jwtService: JwtService,
+    private readonly configService: ConfigService,
     // Deliberate exception to the Phase 4 "no direct NotificationsService
-    // calls" convention: OTP emails are security-sensitive, single-purpose,
-    // and must never be persisted as a general in-app Notification (unlike
-    // the domain-event-driven business notifications), so they're sent
-    // directly rather than routed through the event bus.
+    // calls" convention: these are security-sensitive, single-purpose
+    // transactional emails that must never be persisted as a general in-app
+    // Notification (unlike the domain-event-driven business notifications),
+    // so they're sent directly rather than routed through the event bus.
     private readonly notificationsService: NotificationsService,
   ) {}
 
   async register(registerDto: RegisterDto) {
     const user = await this.usersService.createUser(registerDto);
 
-    await this.issueEmailVerificationCode(
+    await this.issueEmailVerificationToken(
       user.id.toString(),
       user.email,
       user.fullName,
@@ -100,33 +106,15 @@ export class AuthService {
   }
 
   async verifyEmail(dto: VerifyEmailDto) {
-    const user = await this.usersService.findByEmailWithVerificationCode(
-      dto.email,
-    );
-
-    if (!user) {
-      throw new BadRequestException('Invalid or expired verification code');
-    }
-
-    if (user.isEmailVerified) {
-      return { message: 'Email already verified.' };
-    }
+    const tokenHash = hashToken(dto.token);
+    const user = await this.usersService.findByVerificationTokenHash(tokenHash);
 
     if (
-      !user.emailVerificationCodeHash ||
+      !user ||
       !user.emailVerificationExpiresAt ||
       user.emailVerificationExpiresAt.getTime() < Date.now()
     ) {
-      throw new BadRequestException('Invalid or expired verification code');
-    }
-
-    const isCodeValid = await bcrypt.compare(
-      dto.code,
-      user.emailVerificationCodeHash,
-    );
-
-    if (!isCodeValid) {
-      throw new BadRequestException('Invalid or expired verification code');
+      throw new BadRequestException('Invalid or expired verification link');
     }
 
     await this.usersService.markEmailVerified(user._id.toString());
@@ -138,7 +126,7 @@ export class AuthService {
     const user = await this.usersService.findByEmail(dto.email);
 
     if (user && !user.isEmailVerified) {
-      await this.issueEmailVerificationCode(
+      await this.issueEmailVerificationToken(
         user._id.toString(),
         user.email,
         user.fullName,
@@ -151,27 +139,33 @@ export class AuthService {
     return { message: GENERIC_RESEND_MESSAGE };
   }
 
-  async forgotPassword(dto: ForgotPasswordDto) {
+  async forgotPassword(dto: ForgotPasswordDto, userAgent?: string) {
     const user = await this.usersService.findByEmail(dto.email);
 
     if (user) {
-      const code = generateOtp();
-      const codeHash = await bcrypt.hash(code, OTP_HASH_ROUNDS);
+      const token = generateToken();
+      const tokenHash = hashToken(token);
       const expiresAt = new Date(Date.now() + PASSWORD_RESET_TTL_MS);
 
-      await this.usersService.setPasswordResetCode(
+      await this.usersService.setPasswordResetToken(
         user._id.toString(),
-        codeHash,
+        tokenHash,
         expiresAt,
       );
 
-      await this.sendOtpEmail(
+      const resetUrl = this.buildFrontendUrl('/reset', { token });
+
+      await this.sendTemplateEmail(
         user.email,
-        user.fullName,
         'Reset your Pawtato password',
-        code,
-        'password reset',
-        15,
+        'forgot-password',
+        {
+          name: user.fullName,
+          resetUrl,
+          expiresIn: PASSWORD_RESET_TTL_LABEL,
+          requestContext: describeUserAgent(userAgent),
+          supportEmail: this.supportEmail,
+        },
       );
     }
 
@@ -180,81 +174,111 @@ export class AuthService {
     return { message: GENERIC_RESET_MESSAGE };
   }
 
-  async resetPassword(dto: ResetPasswordDto) {
-    const user = await this.usersService.findByEmailWithResetCode(dto.email);
+  async resetPassword(dto: ResetPasswordDto, userAgent?: string) {
+    const tokenHash = hashToken(dto.token);
+    const user = await this.usersService.findByResetTokenHash(tokenHash);
 
     if (
       !user ||
-      !user.passwordResetCodeHash ||
       !user.passwordResetExpiresAt ||
       user.passwordResetExpiresAt.getTime() < Date.now()
     ) {
-      throw new BadRequestException('Invalid or expired reset code');
-    }
-
-    const isCodeValid = await bcrypt.compare(
-      dto.code,
-      user.passwordResetCodeHash,
-    );
-
-    if (!isCodeValid) {
-      throw new BadRequestException('Invalid or expired reset code');
+      throw new BadRequestException('Invalid or expired reset link');
     }
 
     const hashedPassword = await bcrypt.hash(dto.newPassword, 10);
 
-    await this.usersService.resetPassword(user._id.toString(), hashedPassword);
+    const changedAt = await this.usersService.resetPassword(
+      user._id.toString(),
+      hashedPassword,
+    );
+
+    await this.sendTemplateEmail(
+      user.email,
+      'Your Pawtato password was changed',
+      'password-reset',
+      {
+        name: user.fullName,
+        changedAt: formatDhakaDateTime(changedAt),
+        requestContext: describeUserAgent(userAgent),
+        loginUrl: this.buildFrontendUrl('/login'),
+        supportEmail: this.supportEmail,
+      },
+    );
 
     return { message: 'Password reset successfully. You can now log in.' };
   }
 
-  private async issueEmailVerificationCode(
+  private async issueEmailVerificationToken(
     userId: string,
     email: string,
     fullName: string,
   ) {
-    const code = generateOtp();
-    const codeHash = await bcrypt.hash(code, OTP_HASH_ROUNDS);
+    const token = generateToken();
+    const tokenHash = hashToken(token);
     const expiresAt = new Date(Date.now() + EMAIL_VERIFICATION_TTL_MS);
 
-    await this.usersService.setEmailVerificationCode(
+    await this.usersService.setEmailVerificationToken(
       userId,
-      codeHash,
+      tokenHash,
       expiresAt,
     );
 
-    await this.sendOtpEmail(
+    const verifyUrl = this.buildFrontendUrl('/verify', { token });
+
+    await this.sendTemplateEmail(
       email,
-      fullName,
-      'Verify your Pawtato email',
-      code,
-      'email verification',
-      10,
+      'Verify your email to activate your Pawtato tags',
+      'verify-email',
+      {
+        name: fullName,
+        verifyUrl,
+        expiresIn: EMAIL_VERIFICATION_TTL_LABEL,
+        supportEmail: this.supportEmail,
+      },
     );
   }
 
   // A failed email send must never fail the request that already succeeded
-  // (registration, forgot-password) — best-effort, logged on failure.
-  private async sendOtpEmail(
+  // (registration, forgot-password, reset-password) — best-effort, logged
+  // on failure.
+  private async sendTemplateEmail(
     to: string,
-    fullName: string,
     subject: string,
-    code: string,
-    purpose: string,
-    ttlMinutes: number,
+    template: string,
+    context: Record<string, unknown>,
   ) {
     try {
-      await this.notificationsService.sendEmail(
+      await this.notificationsService.sendTemplateEmail(
         to,
         subject,
-        `Hi ${fullName}, your Pawtato ${purpose} code is: <strong style="font-size: 20px; letter-spacing: 4px;">${code}</strong>. ` +
-          `This code expires in ${ttlMinutes} minutes. If you didn't request this, you can safely ignore this email.`,
+        template,
+        context,
       );
     } catch (error) {
       this.logger.error(
-        `Failed to send ${purpose} email to ${to}`,
+        `Failed to send "${template}" email to ${to}`,
         error instanceof Error ? error.stack : undefined,
       );
     }
+  }
+
+  private buildFrontendUrl(
+    pathname: string,
+    query?: Record<string, string>,
+  ): string {
+    const base = this.configService
+      .get<string>('app.frontendUrl', 'http://localhost:3000')
+      .replace(/\/$/, '');
+
+    const search = query ? `?${new URLSearchParams(query).toString()}` : '';
+
+    return `${base}${pathname}${search}`;
+  }
+
+  private get supportEmail(): string {
+    return extractEmailAddress(
+      this.configService.get<string>('mail.from', 'hello@pawtato.app'),
+    );
   }
 }
