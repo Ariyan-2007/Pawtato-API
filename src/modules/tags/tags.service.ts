@@ -4,6 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Model } from 'mongoose';
 import { nanoid } from 'nanoid';
 
@@ -15,6 +16,18 @@ import { TagQueryDto } from './dto/tag-query.dto';
 import { TagStatus } from '../../common/enums/tag-status.enum';
 import { PetsService } from '../pets/pets.service';
 import { QrService } from '../qr/qr.service';
+import { DOMAIN_EVENTS } from '../../common/events/domain-events';
+
+// `pet.owner` is a plain ObjectId when unpopulated (the non-admin lookup) but
+// a full document when populated (the admin lookup via findByIdAdmin) —
+// normalize both to a string id rather than trusting Document.toString().
+function extractOwnerId(owner: unknown): string {
+  if (owner && typeof owner === 'object' && '_id' in owner) {
+    return String(owner._id);
+  }
+
+  return String(owner);
+}
 
 @Injectable()
 export class TagsService {
@@ -24,6 +37,7 @@ export class TagsService {
 
     private readonly petsService: PetsService,
     private readonly qrService: QrService,
+    private readonly eventEmitter: EventEmitter2,
   ) {}
 
   async create(dto: CreateTagDto) {
@@ -125,6 +139,14 @@ export class TagsService {
 
     await tag.save();
 
+    this.eventEmitter.emit(DOMAIN_EVENTS.TAG_ASSIGNED, {
+      ownerId,
+      tagId: tag._id.toString(),
+      publicCode: tag.publicCode,
+      petId: pet._id.toString(),
+      petName: pet.name,
+    });
+
     return tag;
   }
 
@@ -141,18 +163,27 @@ export class TagsService {
       );
     }
 
-    if (!isAdmin) {
-      await this.petsService.findOwnedPet(
-        ownerId,
-        tag.assignedPetId.toString(),
-      );
-    }
+    const assignedPetId = tag.assignedPetId.toString();
+
+    const pet = isAdmin
+      ? await this.petsService.findByIdAdmin(assignedPetId)
+      : await this.petsService.findOwnedPet(ownerId, assignedPetId);
 
     tag.status = TagStatus.AVAILABLE;
     tag.assignedPetId = null;
     tag.unassignedAt = new Date();
 
     await tag.save();
+
+    if (pet) {
+      this.eventEmitter.emit(DOMAIN_EVENTS.TAG_UNASSIGNED, {
+        ownerId: extractOwnerId(pet.owner),
+        tagId: tag._id.toString(),
+        publicCode: tag.publicCode,
+        petId: pet._id.toString(),
+        petName: pet.name,
+      });
+    }
 
     return tag;
   }

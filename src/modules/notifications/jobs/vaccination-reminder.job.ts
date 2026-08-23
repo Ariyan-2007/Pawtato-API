@@ -1,7 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
+import { EventEmitter2 } from '@nestjs/event-emitter';
+import { Model, Types } from 'mongoose';
 
 import {
   Vaccination,
@@ -9,11 +10,10 @@ import {
 } from '../../vaccinations/schemas/vaccination.schema';
 import { Pet } from '../../pets/schemas/pet.schema';
 import { User } from '../../users/schemas/user.schema';
-
-import { NotificationsService } from '../notifications.service';
+import { DOMAIN_EVENTS } from '../../../common/events/domain-events';
 
 interface PopulatedVaccination extends Omit<VaccinationDocument, 'pet'> {
-  pet: Pet & { owner: User };
+  pet: Pet & { owner: User & { _id: Types.ObjectId } };
 }
 
 @Injectable()
@@ -24,7 +24,7 @@ export class VaccinationReminderJob {
     @InjectModel(Vaccination.name)
     private readonly vaccinationModel: Model<VaccinationDocument>,
 
-    private readonly notificationsService: NotificationsService,
+    private readonly eventEmitter: EventEmitter2,
   ) {}
 
   @Cron('0 9 * * *')
@@ -61,11 +61,13 @@ export class VaccinationReminderJob {
         continue;
       }
 
-      await this.notificationsService.sendEmail(
+      this.eventEmitter.emit(DOMAIN_EVENTS.VACCINATION_REMINDER_DUE, {
+        ownerId: String(vaccination.pet.owner._id),
         ownerEmail,
-        'Vaccination Reminder',
-        `Your pet's vaccination "${vaccination.vaccineName}" is due on ${vaccination.nextDueDate.toDateString()}.`,
-      );
+        petName: vaccination.pet.name,
+        vaccineName: vaccination.vaccineName,
+        nextDueDate: vaccination.nextDueDate,
+      });
 
       vaccination.reminderSent = true;
       vaccination.lastReminderSentAt = new Date();

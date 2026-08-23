@@ -1,5 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getModelToken } from '@nestjs/mongoose';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PetsService } from './pets.service';
 import { Pet } from './schemas/pet.schema';
 
@@ -11,6 +12,7 @@ describe('PetsService', () => {
       providers: [
         PetsService,
         { provide: getModelToken(Pet.name), useValue: {} },
+        { provide: EventEmitter2, useValue: {} },
       ],
     }).compile();
 

@@ -46,8 +46,11 @@ async function bootstrap() {
 
   const swaggerConfig = new DocumentBuilder()
     .setTitle('Pawtato API')
-    .setDescription('Digital Identity Platform for Pets')
+    .setDescription(
+      'Digital identity and lost & found platform for pets. Public, unauthenticated routes live under `/public`; everything else requires a bearer JWT obtained via `/auth/login`.',
+    )
     .setVersion('1.0')
+    .addServer(appUrl ?? `http://localhost:${port}`)
     .addBearerAuth(
       {
         type: 'http',
@@ -57,11 +60,34 @@ async function bootstrap() {
       },
       'JWT-auth',
     )
+    .addTag('Authentication', 'Register, login, and token issuance')
+    .addTag('Users', "Authenticated user's own profile")
+    .addTag('Pets', "CRUD and lost/found status for a caller's own pets")
+    .addTag('Tags', 'QR tag inventory and assign/unassign lifecycle')
+    .addTag(
+      'Public',
+      'Unauthenticated routes: tag resolution, lost-pets listing, found reports',
+    )
+    .addTag('Scans', "A pet's QR scan history")
+    .addTag('Found Reports', "Finder reports submitted against a pet's tag")
+    .addTag('Medical Records', "A pet's medical history")
+    .addTag('Vaccinations', "A pet's vaccination records and reminders")
+    .addTag(
+      'Notifications',
+      "The caller's in-app notification feed (list, mark as read)",
+    )
+    .addTag('Admin', 'Admin-only dashboard, user, and pet management')
+    .addTag('Activity', 'Admin action audit log')
+    .addTag('Health', 'Liveness check')
     .build();
 
   const document = SwaggerModule.createDocument(app, swaggerConfig);
 
-  SwaggerModule.setup(`${apiPrefix}/docs`, app, document);
+  SwaggerModule.setup(`${apiPrefix}/docs`, app, document, {
+    swaggerOptions: {
+      persistAuthorization: true,
+    },
+  });
 
   await app.listen(port);
 

@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
+import { EventEmitterModule } from '@nestjs/event-emitter';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 
 import configuration from './config/configuration';
@@ -40,6 +41,7 @@ import { ActivityModule } from './modules/activity/activity.module';
       serveRoot: '/uploads',
     }),
     ScheduleModule.forRoot(),
+    EventEmitterModule.forRoot(),
 
     ThrottlerModule.forRoot([
       {
