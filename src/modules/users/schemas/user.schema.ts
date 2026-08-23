@@ -1,6 +1,7 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument } from 'mongoose';
 import { UserRole } from '../../../common/enums/user-role.enum';
+import { AccountStatus } from '../../../common/enums/account-status.enum';
 
 export type UserDocument = HydratedDocument<User>;
 
@@ -55,23 +56,44 @@ export class User {
   })
   isActive!: boolean;
 
+  // The single authoritative source of truth for the email-verification
+  // lifecycle (see AccountStatus) — deliberately not a boolean, so there's
+  // never a way for "pending" and "verified" to both/neither be true.
   @Prop({
-    default: false,
-  })
-  isEmailVerified!: boolean;
-
-  // SHA-256 hash of the emailed verification token (not bcrypt — this needs
-  // to be looked up directly by value, since the magic link carries only the
-  // token, not the user's email; bcrypt's random salting makes that kind of
-  // lookup impossible).
-  @Prop({
-    select: false,
+    type: String,
+    default: AccountStatus.PENDING_VERIFICATION,
+    enum: AccountStatus,
     index: true,
   })
-  emailVerificationTokenHash?: string;
+  status!: AccountStatus;
+
+  // SHA-256 hash of the emailed OTP (not bcrypt — this needs a fast,
+  // deterministic comparison against a single active code per user, not a
+  // per-guess-salted password check). Only one OTP is ever active per user;
+  // issuing a new one overwrites these fields, which is what makes the
+  // previous code stop working.
+  @Prop({
+    select: false,
+  })
+  otpHash?: string;
 
   @Prop()
-  emailVerificationExpiresAt?: Date;
+  otpExpiresAt?: Date;
+
+  // Failed verification attempts against the *current* otpHash. Reset to 0
+  // whenever a new OTP is issued; once it reaches the configured max, the
+  // OTP is invalidated and the user must request a new one (see
+  // OTP_MAX_ATTEMPTS in auth.service.ts).
+  @Prop({
+    default: 0,
+    select: false,
+  })
+  otpAttempts!: number;
+
+  // When the OTP was last (re)issued — enforces the resend cooldown so a
+  // user (or an attacker) can't trigger unlimited verification emails.
+  @Prop()
+  otpLastSentAt?: Date;
 
   @Prop({
     select: false,

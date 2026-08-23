@@ -1,11 +1,12 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import { nanoid } from 'nanoid';
 
 import { Tag, TagDocument } from './schemas/tag.schema';
@@ -17,6 +18,9 @@ import { TagStatus } from '../../common/enums/tag-status.enum';
 import { PetsService } from '../pets/pets.service';
 import { QrService } from '../qr/qr.service';
 import { DOMAIN_EVENTS } from '../../common/events/domain-events';
+import { isDuplicateKeyError } from '../../common/utils/mongo.util';
+
+const MAX_PUBLIC_CODE_COLLISION_RETRIES = 3;
 
 // `pet.owner` is a plain ObjectId when unpopulated (the non-admin lookup) but
 // a full document when populated (the admin lookup via findByIdAdmin) —
@@ -40,18 +44,52 @@ export class TagsService {
     private readonly eventEmitter: EventEmitter2,
   ) {}
 
-  async create(dto: CreateTagDto) {
-    const publicCode = nanoid(10);
-    const serialNumber = dto.serialNumber?.trim() || nanoid(12);
+  // Self-service: any authenticated user creates their own tag directly (no
+  // admin-seeded inventory to claim). The frontend supplies the route it
+  // wants scans to land on (everything but the code); the backend generates
+  // the code, builds the full link, and renders/stores the QR image for it.
+  async create(ownerId: string, dto: CreateTagDto) {
+    const redirectBase = dto.redirectBaseUrl.replace(/\/+$/, '');
 
-    const qrImageUrl = await this.qrService.generate(publicCode);
+    for (
+      let attempt = 1;
+      attempt <= MAX_PUBLIC_CODE_COLLISION_RETRIES;
+      attempt++
+    ) {
+      const publicCode = nanoid(10);
+      const linkUrl = `${redirectBase}/${publicCode}`;
 
-    return this.tagModel.create({
-      publicCode,
-      serialNumber,
-      status: TagStatus.AVAILABLE,
-      qrImageUrl,
-    });
+      const qrImageUrl = await this.qrService.generate(publicCode, linkUrl);
+
+      try {
+        return await this.tagModel.create({
+          publicCode,
+          linkUrl,
+          qrImageUrl,
+          ownerId: new Types.ObjectId(ownerId),
+          status: TagStatus.AVAILABLE,
+        });
+      } catch (error) {
+        // publicCode collisions are astronomically unlikely (nanoid(10) over
+        // a 64-character alphabet) but not impossible — retry with a fresh
+        // code rather than surfacing a raw 500 for something the caller had
+        // no way to avoid. Any other error (including a stale/misconfigured
+        // unique index — see DatabaseModule.onApplicationBootstrap) is
+        // rethrown immediately rather than masked by retries.
+        if (
+          isDuplicateKeyError(error) &&
+          attempt < MAX_PUBLIC_CODE_COLLISION_RETRIES
+        ) {
+          await this.qrService.delete(publicCode);
+          continue;
+        }
+
+        throw error;
+      }
+    }
+
+    // Unreachable — the loop always returns or throws — but keeps TS happy.
+    throw new Error('Failed to create a unique tag after retrying');
   }
 
   async findAll(query: TagQueryDto) {
@@ -78,14 +116,13 @@ export class TagsService {
     };
   }
 
+  // Every tag the caller owns, regardless of status — a newly-created,
+  // not-yet-linked tag needs to show up here too, not just ones currently
+  // assigned to a pet.
   async findMine(ownerId: string) {
-    const pets = await this.petsService.findAll(ownerId);
-    const petIds = pets.map((pet) => pet._id);
-
-    return this.tagModel.find({
-      assignedPetId: { $in: petIds },
-      status: TagStatus.ASSIGNED,
-    });
+    return this.tagModel
+      .find({ ownerId: new Types.ObjectId(ownerId) })
+      .sort({ createdAt: -1 });
   }
 
   async findOne(id: string) {
@@ -108,12 +145,36 @@ export class TagsService {
     return tag;
   }
 
-  async assign(ownerId: string, dto: AssignTagDto) {
+  private assertOwnsTag(tag: TagDocument, callerId: string, isAdmin: boolean) {
+    if (isAdmin) {
+      return;
+    }
+
+    if (!tag.ownerId.equals(callerId)) {
+      throw new ForbiddenException('You do not own this tag');
+    }
+  }
+
+  // Ownership-checked lookup by Mongo id, shared with anything else that
+  // needs to act on a specific tag the caller owns (e.g.
+  // FoundReportsService.findForOwnedTag) without duplicating the
+  // owner-vs-admin check.
+  async findOwnedById(ownerId: string, id: string, isAdmin: boolean) {
+    const tag = await this.findOne(id);
+
+    this.assertOwnsTag(tag, ownerId, isAdmin);
+
+    return tag;
+  }
+
+  async assign(ownerId: string, dto: AssignTagDto, isAdmin: boolean) {
     const tag = await this.tagModel.findOne({ publicCode: dto.publicCode });
 
     if (!tag) {
       throw new NotFoundException('Tag not found');
     }
+
+    this.assertOwnsTag(tag, ownerId, isAdmin);
 
     if (tag.status !== TagStatus.AVAILABLE) {
       throw new BadRequestException('This tag is not available for assignment');
@@ -157,17 +218,17 @@ export class TagsService {
       throw new NotFoundException('Tag not found');
     }
 
+    this.assertOwnsTag(tag, ownerId, isAdmin);
+
     if (tag.status !== TagStatus.ASSIGNED || !tag.assignedPetId) {
       throw new BadRequestException(
         'This tag is not currently assigned to a pet',
       );
     }
 
-    const assignedPetId = tag.assignedPetId.toString();
-
-    const pet = isAdmin
-      ? await this.petsService.findByIdAdmin(assignedPetId)
-      : await this.petsService.findOwnedPet(ownerId, assignedPetId);
+    const pet = await this.petsService.findByIdAdmin(
+      tag.assignedPetId.toString(),
+    );
 
     tag.status = TagStatus.AVAILABLE;
     tag.assignedPetId = null;
@@ -186,6 +247,37 @@ export class TagsService {
     }
 
     return tag;
+  }
+
+  // Owner-facing hard delete — permanently destroys the tag (and its QR
+  // image), so a scan of the physical sticker afterward resolves to nothing.
+  // If it's currently linked to a pet, that link is cleared first rather
+  // than blocking the delete on an explicit unassign step.
+  async delete(ownerId: string, id: string, isAdmin: boolean) {
+    const tag = await this.findOne(id);
+
+    this.assertOwnsTag(tag, ownerId, isAdmin);
+
+    if (tag.status === TagStatus.ASSIGNED && tag.assignedPetId) {
+      const pet = await this.petsService.findByIdAdmin(
+        tag.assignedPetId.toString(),
+      );
+
+      if (pet) {
+        this.eventEmitter.emit(DOMAIN_EVENTS.TAG_UNASSIGNED, {
+          ownerId: extractOwnerId(pet.owner),
+          tagId: tag._id.toString(),
+          publicCode: tag.publicCode,
+          petId: pet._id.toString(),
+          petName: pet.name,
+        });
+      }
+    }
+
+    await this.qrService.delete(tag.publicCode);
+    await this.tagModel.findByIdAndDelete(tag._id);
+
+    return { message: 'Tag deleted successfully' };
   }
 
   async suspend(id: string) {

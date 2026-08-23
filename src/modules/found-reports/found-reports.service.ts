@@ -1,4 +1,10 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import {
+  BadRequestException,
+  HttpException,
+  HttpStatus,
+  Injectable,
+  Logger,
+} from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Model, Types } from 'mongoose';
@@ -18,6 +24,17 @@ import { DOMAIN_EVENTS } from '../../common/events/domain-events';
 interface PetWithOwner extends Omit<PetDocument, 'owner'> {
   owner: User & { _id: Types.ObjectId };
 }
+
+// This endpoint is anonymous/no-auth and reachable by anyone who can scan a
+// physical tag — the deviceFingerprint the client sends is the only handle
+// available to contain spam/abuse beyond the IP-based throttle already on
+// the controller route. Two independent limits: a per-tag cooldown (stops a
+// single finder hammering the same pet's owner with repeat submissions) and
+// a broader per-fingerprint cap across all tags (stops one device farming
+// reports/emails across many pets).
+const SAME_TAG_COOLDOWN_MS = 10 * 60 * 1000; // 10 minutes
+const MAX_REPORTS_PER_WINDOW = 5;
+const REPORTS_WINDOW_MS = 60 * 60 * 1000; // 1 hour
 
 @Injectable()
 export class FoundReportsService {
@@ -45,12 +62,15 @@ export class FoundReportsService {
       );
     }
 
+    await this.assertNotSpamming(dto.deviceFingerprint, tag._id);
+
     const report = await this.foundReportModel.create({
       tag: tag._id,
       pet: tag.assignedPetId,
       message: dto.message,
       approxLocation: dto.approxLocation,
       contactInfo: dto.contactInfo,
+      deviceFingerprint: dto.deviceFingerprint,
       photoUrl,
     });
 
@@ -90,9 +110,51 @@ export class FoundReportsService {
     }
   }
 
+  private async assertNotSpamming(
+    deviceFingerprint: string,
+    tagId: Types.ObjectId,
+  ) {
+    const now = Date.now();
+
+    const recentForSameTag = await this.foundReportModel.exists({
+      tag: tagId,
+      deviceFingerprint,
+      createdAt: { $gte: new Date(now - SAME_TAG_COOLDOWN_MS) },
+    });
+
+    if (recentForSameTag) {
+      throw new HttpException(
+        'You already reported this recently — please wait before submitting again.',
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+
+    const recentCount = await this.foundReportModel.countDocuments({
+      deviceFingerprint,
+      createdAt: { $gte: new Date(now - REPORTS_WINDOW_MS) },
+    });
+
+    if (recentCount >= MAX_REPORTS_PER_WINDOW) {
+      throw new HttpException(
+        'Too many reports submitted from this device recently — please try again later.',
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+  }
+
   async findForOwnedPet(ownerId: string, petId: string) {
     await this.petsService.findOwnedPet(ownerId, petId);
 
     return this.foundReportModel.find({ pet: petId }).sort({ createdAt: -1 });
+  }
+
+  // Scoped to the tag itself (not whichever pet currently owns it) — a
+  // report submitted while the tag was linked to an earlier pet still shows
+  // up here, since it's the physical sticker's history, not the current
+  // pet's. Keyed by `tag`, matching what create() stores.
+  async findForOwnedTag(ownerId: string, tagId: string, isAdmin: boolean) {
+    const tag = await this.tagsService.findOwnedById(ownerId, tagId, isAdmin);
+
+    return this.foundReportModel.find({ tag: tag._id }).sort({ createdAt: -1 });
   }
 }

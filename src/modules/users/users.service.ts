@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 
 import { InjectModel } from '@nestjs/mongoose';
 
@@ -12,6 +12,7 @@ import { Pet, PetDocument } from '../pets/schemas/pet.schema';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { UserRole } from '../../common/enums/user-role.enum';
+import { AccountStatus } from '../../common/enums/account-status.enum';
 import { AdminUserQueryDto } from '../admin/dto/admin-user-query.dto';
 
 @Injectable()
@@ -23,61 +24,67 @@ export class UsersService {
     private readonly petModel: Model<PetDocument>,
   ) {}
 
+  // No pre-insert existence check here by design — AuthService already
+  // decides whether to call this (only when no account exists for the
+  // normalized email). The email field's unique index is the real guard
+  // against a race between two concurrent registrations; a duplicate-key
+  // error (code 11000) propagates to the caller to handle as "someone else
+  // just won this race" rather than a generic 500.
   async createUser(createUserDto: CreateUserDto) {
-    const existingUser = await this.userModel.findOne({
-      email: createUserDto.email,
-    });
-
-    if (existingUser) {
-      throw new BadRequestException('Email already exists');
-    }
-
     const hashedPassword = await bcrypt.hash(createUserDto.password, 10);
 
-    const user = await this.userModel.create({
+    return this.userModel.create({
       ...createUserDto,
       password: hashedPassword,
+      status: AccountStatus.PENDING_VERIFICATION,
     });
-
-    return {
-      id: user._id,
-      fullName: user.fullName,
-      email: user.email,
-      role: user.role,
-      isEmailVerified: user.isEmailVerified,
-      createdAt: user.get('createdAt') as Date,
-    };
   }
 
+  // Selects the sensitive fields needed across the auth flows (login's
+  // password check, OTP issuance/verification) — never returned directly to
+  // an API response, only consumed internally by AuthService.
   async findByEmail(email: string) {
-    return this.userModel.findOne({ email }).select('+password');
-  }
-
-  async findByVerificationTokenHash(tokenHash: string) {
     return this.userModel
-      .findOne({ emailVerificationTokenHash: tokenHash })
-      .select('+emailVerificationTokenHash');
+      .findOne({ email })
+      .select('+password +otpHash +otpAttempts');
   }
 
-  async setEmailVerificationToken(
-    userId: string,
-    tokenHash: string,
-    expiresAt: Date,
-  ) {
+  async setOtp(userId: string, otpHash: string, expiresAt: Date) {
     return this.userModel.findByIdAndUpdate(userId, {
-      emailVerificationTokenHash: tokenHash,
-      emailVerificationExpiresAt: expiresAt,
+      otpHash,
+      otpExpiresAt: expiresAt,
+      otpAttempts: 0,
+      otpLastSentAt: new Date(),
     });
   }
 
-  async markEmailVerified(userId: string) {
+  async incrementOtpAttempts(userId: string) {
+    return this.userModel.findByIdAndUpdate(userId, {
+      $inc: { otpAttempts: 1 },
+    });
+  }
+
+  // Invalidates the current OTP without issuing a new one — used once the
+  // attempt limit is hit, forcing the user through resend-otp (and its
+  // cooldown) rather than letting them keep guessing against the same code.
+  async clearOtp(userId: string) {
+    return this.userModel.findByIdAndUpdate(userId, {
+      otpHash: null,
+      otpExpiresAt: null,
+      otpAttempts: 0,
+    });
+  }
+
+  async activateAccount(userId: string) {
     return this.userModel
       .findByIdAndUpdate(
         userId,
         {
-          isEmailVerified: true,
-          emailVerificationTokenHash: null,
-          emailVerificationExpiresAt: null,
+          status: AccountStatus.ACTIVE,
+          otpHash: null,
+          otpExpiresAt: null,
+          otpAttempts: 0,
+          otpLastSentAt: null,
         },
         { new: true },
       )
@@ -115,9 +122,14 @@ export class UsersService {
   }
 
   // Lean lookup used on every authenticated request (JwtStrategy) — only the
-  // fields needed to decide whether a JWT is still valid.
+  // fields needed to decide whether a JWT is still valid. `status` is
+  // included as defense in depth: a valid token should never exist for a
+  // pending account (tokens are only issued on login/verify-otp once
+  // Active), but this guards against that invariant ever being violated.
   async findAuthState(userId: string) {
-    return this.userModel.findById(userId).select('isActive passwordChangedAt');
+    return this.userModel
+      .findById(userId)
+      .select('isActive status passwordChangedAt');
   }
 
   async getProfile(userId: string) {

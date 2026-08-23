@@ -25,8 +25,15 @@ export class PublicService {
   async getPetProfile(publicCode: string, userAgent?: string) {
     const tag = await this.tagModel.findOne({ publicCode });
 
+    // A code that was never issued and a code that exists but isn't linked
+    // to a pet resolve to the same "not linked" response — a stranger
+    // scanning a sticker can't tell the two apart anyway, and collapsing
+    // them avoids leaking which codes are real via a 404-vs-200 difference.
     if (!tag) {
-      throw new NotFoundException('Tag not found');
+      return {
+        tagStatus: TagStatus.AVAILABLE,
+        message: 'This QR is not linked to a pet.',
+      };
     }
 
     if (tag.status === TagStatus.RETIRED) {
@@ -52,7 +59,7 @@ export class PublicService {
 
       return {
         tagStatus: tag.status,
-        message: 'This tag has not been linked to a pet yet.',
+        message: 'This QR is not linked to a pet.',
       };
     }
 
@@ -78,11 +85,18 @@ export class PublicService {
 
     return {
       tagStatus: TagStatus.ASSIGNED,
+      // Explicit, finder-facing label alongside the raw boolean — "is this
+      // pet missing or safe" shouldn't require the frontend to interpret a
+      // boolean itself.
+      petStatus: pet.isLost ? 'MISSING' : 'SAFE',
       name: pet.name,
       species: pet.species,
       breed: pet.breed,
       gender: pet.gender,
       color: pet.color,
+      birthDate: pet.birthDate,
+      weight: pet.weight,
+      notableTrait: pet.notableTrait,
       isLost: pet.isLost,
       profileImage: pet.profileImage,
       lastSeenLocation: pet.lastSeenLocation,

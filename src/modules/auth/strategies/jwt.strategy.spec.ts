@@ -2,6 +2,7 @@ import { UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtStrategy } from './jwt.strategy';
 import { UsersService } from '../../users/users.service';
+import { AccountStatus } from '../../../common/enums/account-status.enum';
 
 describe('JwtStrategy', () => {
   let strategy: JwtStrategy;
@@ -33,6 +34,19 @@ describe('JwtStrategy', () => {
   it('rejects when the user is blocked (isActive: false)', async () => {
     usersService.findAuthState.mockResolvedValue({
       isActive: false,
+      status: AccountStatus.ACTIVE,
+      passwordChangedAt: undefined,
+    });
+
+    await expect(strategy.validate(basePayload)).rejects.toThrow(
+      UnauthorizedException,
+    );
+  });
+
+  it('rejects when the account is still pending email verification', async () => {
+    usersService.findAuthState.mockResolvedValue({
+      isActive: true,
+      status: AccountStatus.PENDING_VERIFICATION,
       passwordChangedAt: undefined,
     });
 
@@ -47,6 +61,7 @@ describe('JwtStrategy', () => {
 
     usersService.findAuthState.mockResolvedValue({
       isActive: true,
+      status: AccountStatus.ACTIVE,
       passwordChangedAt,
     });
 
@@ -61,6 +76,7 @@ describe('JwtStrategy', () => {
 
     usersService.findAuthState.mockResolvedValue({
       isActive: true,
+      status: AccountStatus.ACTIVE,
       passwordChangedAt,
     });
 
@@ -73,6 +89,7 @@ describe('JwtStrategy', () => {
   it('accepts a valid, active user with no password change on record', async () => {
     usersService.findAuthState.mockResolvedValue({
       isActive: true,
+      status: AccountStatus.ACTIVE,
       passwordChangedAt: undefined,
     });
 

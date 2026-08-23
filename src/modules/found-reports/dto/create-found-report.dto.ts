@@ -1,4 +1,10 @@
-import { IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
+import {
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  MaxLength,
+  MinLength,
+} from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class CreateFoundReportDto {
@@ -10,6 +16,20 @@ export class CreateFoundReportDto {
   @IsNotEmpty()
   @MaxLength(1000)
   message!: string;
+
+  @ApiProperty({
+    example: 'f47ac10b-58cc-4372-a567-0e02b2c3d479',
+    description:
+      'An opaque identifier generated and persisted client-side (e.g. a UUID kept in ' +
+      'localStorage), sent with every found-report submission from this browser/device. ' +
+      'Used only for spam/abuse rate-limiting on this anonymous, no-auth endpoint — not tied ' +
+      'to any account.',
+  })
+  @IsString()
+  @IsNotEmpty()
+  @MinLength(8)
+  @MaxLength(256)
+  deviceFingerprint!: string;
 
   @ApiPropertyOptional({ example: 'Dhanmondi, Dhaka' })
   @IsOptional()

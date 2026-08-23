@@ -16,12 +16,24 @@ export class Tag {
   })
   publicCode!: string;
 
+  // The user who created (and therefore owns) this tag — the authority for
+  // who may assign/unassign/delete it, independent of which pet it happens
+  // to be linked to at any given moment.
   @Prop({
+    type: Types.ObjectId,
+    ref: 'User',
     required: true,
-    unique: true,
     index: true,
   })
-  serialNumber!: string;
+  ownerId!: Types.ObjectId;
+
+  // The full URL encoded into the QR image (the frontend's landing route +
+  // this tag's publicCode) — stored so it doesn't need to be reconstructed
+  // and so it's inspectable directly on the tag record.
+  @Prop({
+    required: true,
+  })
+  linkUrl!: string;
 
   @Prop({
     type: String,

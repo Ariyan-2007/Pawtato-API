@@ -12,8 +12,8 @@ import { Throttle } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
-import { VerifyEmailDto } from './dto/verify-email.dto';
-import { ResendVerificationDto } from './dto/resend-verification.dto';
+import { VerifyOtpDto } from './dto/verify-otp.dto';
+import { ResendOtpDto } from './dto/resend-otp.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
@@ -34,26 +34,39 @@ export class AuthController {
   @ApiOperation({
     summary: 'Register a new Pawtato account',
     description:
-      'Creates the account and emails a verification link (valid 24 hours). ' +
-      'The returned access token is usable immediately regardless of verification status.',
+      'Creates a pending account and emails a 6-digit verification code (valid 10 minutes). ' +
+      'No access token is issued here — the account only becomes usable after verify-otp succeeds. ' +
+      'If the email already has a pending (unverified) account, no new account is created and a ' +
+      'fresh code is sent instead. If the email already belongs to a verified account, this fails ' +
+      'with a conflict instead of sending anything.',
   })
   @ApiResponse({
     status: 201,
     description:
-      'Account created, access token issued, verification email sent.',
+      'Pending account ready for verification; a code was sent (either a new account, or a resend for an existing pending one).',
   })
   @ApiResponse({ status: 400, description: 'Validation failed.' })
+  @ApiResponse({ status: 409, description: 'Email already registered.' })
+  @Throttle({ write: { limit: 5, ttl: 60_000 } })
   @Post('register')
   register(@Body() registerDto: RegisterDto) {
     return this.authService.register(registerDto);
   }
 
-  @ApiOperation({ summary: 'Log in with email and password' })
+  @ApiOperation({
+    summary: 'Log in with email and password',
+    description:
+      'Returns an access token only for a verified/active account. For a pending account with ' +
+      'correct credentials, no token is issued — a new verification code is sent instead and the ' +
+      'response body carries `verificationRequired: true` so the frontend can route to the OTP screen.',
+  })
   @ApiResponse({
     status: 200,
-    description: 'Login successful, access token issued.',
+    description:
+      'Either a normal login (accessToken + user) or, for a pending account, a verification-required response with no token.',
   })
   @ApiResponse({ status: 401, description: 'Invalid email or password.' })
+  @HttpCode(HttpStatus.OK)
   @Post('login')
   login(@Body() loginDto: LoginDto) {
     return this.authService.login(loginDto);
@@ -73,32 +86,43 @@ export class AuthController {
   }
 
   @ApiOperation({
-    summary: 'Verify an email address using the token from the verify link',
+    summary: 'Verify the 6-digit OTP sent to an email',
     description:
-      'Called by the frontend page at FRONTEND_URL/verify?token=... with the token from the query string.',
+      'Used to complete both the post-registration flow and the pending-account-login flow — ' +
+      'on success the account becomes Active and an access token is returned immediately (the ' +
+      'user does not need to log in again).',
   })
-  @ApiResponse({ status: 200, description: 'Email verified successfully.' })
-  @ApiResponse({
-    status: 400,
-    description: 'Invalid or expired verification link.',
-  })
-  @HttpCode(HttpStatus.OK)
-  @Post('verify-email')
-  verifyEmail(@Body() dto: VerifyEmailDto) {
-    return this.authService.verifyEmail(dto);
-  }
-
-  @ApiOperation({ summary: 'Resend the email verification link' })
   @ApiResponse({
     status: 200,
+    description: 'Verified; account activated and access token issued.',
+  })
+  @ApiResponse({ status: 400, description: 'Invalid or expired OTP.' })
+  @Throttle({ write: { limit: 10, ttl: 60_000 } })
+  @HttpCode(HttpStatus.OK)
+  @Post('verify-otp')
+  verifyOtp(@Body() dto: VerifyOtpDto) {
+    return this.authService.verifyOtp(dto);
+  }
+
+  @ApiOperation({
+    summary: 'Resend the OTP for a pending account',
     description:
-      'Generic confirmation message (does not reveal whether the email is registered).',
+      'Generic confirmation message regardless of whether the email is registered or already ' +
+      'verified (avoids account enumeration). Subject to a resend cooldown per account.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Generic confirmation message.',
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Resend cooldown still active for this account.',
   })
   @Throttle({ write: { limit: 5, ttl: 60_000 } })
   @HttpCode(HttpStatus.OK)
-  @Post('resend-verification')
-  resendVerification(@Body() dto: ResendVerificationDto) {
-    return this.authService.resendVerification(dto);
+  @Post('resend-otp')
+  resendOtp(@Body() dto: ResendOtpDto) {
+    return this.authService.resendOtp(dto);
   }
 
   @ApiOperation({ summary: 'Request a password reset link by email' })

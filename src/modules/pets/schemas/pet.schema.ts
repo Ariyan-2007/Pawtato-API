@@ -46,6 +46,15 @@ export class Pet {
   @Prop()
   weight?: number;
 
+  // One safety-relevant thing a stranger should know before approaching —
+  // e.g. "Friendly but startles easily, approach calmly" or "May nip if
+  // grabbed suddenly". Shown on the public scan profile.
+  @Prop({
+    trim: true,
+    maxlength: 200,
+  })
+  notableTrait?: string;
+
   @Prop({
     default: '',
   })
