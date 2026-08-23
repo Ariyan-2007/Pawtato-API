@@ -54,6 +54,27 @@ export class User {
     default: true,
   })
   isActive!: boolean;
+
+  @Prop({
+    default: false,
+  })
+  isEmailVerified!: boolean;
+
+  @Prop({
+    select: false,
+  })
+  emailVerificationCodeHash?: string;
+
+  @Prop()
+  emailVerificationExpiresAt?: Date;
+
+  @Prop({
+    select: false,
+  })
+  passwordResetCodeHash?: string;
+
+  @Prop()
+  passwordResetExpiresAt?: Date;
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);

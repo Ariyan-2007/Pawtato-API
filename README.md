@@ -5,6 +5,7 @@ A NestJS/MongoDB backend for a pet QR-tag digital identity and lost & found plat
 - **Product spec:** [`PAWTATO_PROJECT_SPEC.md`](./PAWTATO_PROJECT_SPEC.md) — what to build.
 - **Delivery roadmap:** [`PAWTATO_ROADMAP.md`](./PAWTATO_ROADMAP.md) — phased build plan and progress log; read this first if you're picking up ongoing work.
 - **Frontend blueprint:** [`PAWTATO_FRONTEND_BLUEPRINT.md`](./PAWTATO_FRONTEND_BLUEPRINT.md) — PWA-first design brief for the companion frontend.
+- **Frontend implementation docs:** [`frontend-docs/`](./frontend-docs/) — one Markdown file per feature portion, with exact request/response shapes for every endpoint needed to build that portion.
 
 ## Tech stack
 

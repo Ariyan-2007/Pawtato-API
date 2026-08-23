@@ -22,7 +22,17 @@ async function bootstrap() {
   const appUrl = configService.get<string>('app.url');
   const corsOrigins = configService.get<string[]>('app.corsOrigins') ?? [];
 
-  app.use(helmet());
+  app.use(
+    helmet({
+      // Images (avatars, pet photos, QR codes) are meant to be embedded by
+      // frontends on other origins/ports — Helmet's default `same-origin`
+      // CORP blocks that even when CORS headers are correct, since CORP is
+      // a separate browser mechanism that isn't satisfied by an
+      // Access-Control-Allow-Origin header. Real access control still comes
+      // from CORS_ORIGINS (data endpoints) and JWT auth, not CORP.
+      crossOriginResourcePolicy: { policy: 'cross-origin' },
+    }),
+  );
 
   app.enableCors({
     origin: corsOrigins.length > 0 ? corsOrigins : false,
