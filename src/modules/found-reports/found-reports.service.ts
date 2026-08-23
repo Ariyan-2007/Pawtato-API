@@ -101,6 +101,7 @@ export class FoundReportsService {
         petName: pet.name,
         foundReportId: String(report._id),
         message: report.message,
+        isLost: pet.isLost,
       });
     } catch (error) {
       this.logger.error(

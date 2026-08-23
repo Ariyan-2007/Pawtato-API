@@ -9,6 +9,7 @@ import {
 
 import { Type } from 'class-transformer';
 import { ApiPropertyOptional } from '@nestjs/swagger';
+import { ParseOptionalBoolean } from '../../../common/decorators/parse-optional-boolean.decorator';
 
 import { UserRole } from '../../../common/enums/user-role.enum';
 
@@ -38,8 +39,7 @@ export class AdminUserQueryDto {
   role?: UserRole;
 
   @ApiPropertyOptional()
-  @IsOptional()
-  @Type(() => Boolean)
+  @ParseOptionalBoolean()
   isActive?: boolean;
 
   @ApiPropertyOptional({ default: 'createdAt' })

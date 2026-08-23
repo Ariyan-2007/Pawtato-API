@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Inject,
   Patch,
@@ -102,5 +103,12 @@ export class UsersController {
       message: 'Avatar uploaded successfully',
       avatar: updatedUser?.avatar,
     };
+  }
+
+  @ApiOperation({ summary: "Remove the current user's avatar image" })
+  @ApiResponse({ status: 200, description: 'Avatar removed.' })
+  @Delete('avatar')
+  removeAvatar(@CurrentUser() user: JwtPayload) {
+    return this.usersService.removeAvatar(user.sub);
   }
 }

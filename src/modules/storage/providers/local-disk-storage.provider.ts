@@ -47,4 +47,14 @@ export class LocalDiskStorageProvider implements StorageProvider {
       }
     }
   }
+
+  async deleteByUrl(url: string): Promise<void> {
+    const prefix = '/uploads/';
+
+    if (!url.startsWith(prefix)) {
+      return;
+    }
+
+    await this.delete(url.slice(prefix.length));
+  }
 }

@@ -166,6 +166,23 @@ export class PetsController {
     };
   }
 
+  @ApiOperation({ summary: "Remove a pet's profile photo" })
+  @ApiParam({ name: 'id', description: 'Pet ID' })
+  @ApiResponse({ status: 200, description: 'Photo removed.' })
+  @ApiResponse({
+    status: 404,
+    description: 'Pet not found or not owned by the caller.',
+  })
+  @Delete(':id/photo')
+  removePhoto(
+    @CurrentUser() user: JwtPayload,
+
+    @Param('id')
+    petId: string,
+  ) {
+    return this.petsService.removePhoto(user.sub, petId);
+  }
+
   @ApiOperation({ summary: 'Delete a pet owned by the current user' })
   @ApiParam({ name: 'id', description: 'Pet ID' })
   @ApiResponse({ status: 200, description: 'Pet deleted.' })

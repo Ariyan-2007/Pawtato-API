@@ -8,6 +8,7 @@ import { join } from 'path';
 import { NotificationsController } from './notifications.controller';
 import { NotificationsService } from './notifications.service';
 import { VaccinationReminderJob } from './jobs/vaccination-reminder.job';
+import { NotificationCleanupJob } from './jobs/notification-cleanup.job';
 import {
   Notification,
   NotificationSchema,
@@ -62,6 +63,7 @@ import { VaccinationsModule } from '../vaccinations/vaccinations.module';
   providers: [
     NotificationsService,
     VaccinationReminderJob,
+    NotificationCleanupJob,
     EmailChannel,
     DomainEventsListener,
     {

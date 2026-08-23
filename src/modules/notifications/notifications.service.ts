@@ -9,6 +9,11 @@ import {
 } from './schemas/notification.schema';
 import { NotificationQueryDto } from './dto/notification-query.dto';
 import { renderPlainTextTemplate } from '../../mail/mail-template.util';
+import { NotificationPriority } from './enums/notification-priority.enum';
+import {
+  resolveExpiresAt,
+  resolvePriority,
+} from './utils/notification-priority.util';
 
 @Injectable()
 export class NotificationsService {
@@ -66,12 +71,22 @@ export class NotificationsService {
     message: string,
     data?: Record<string, unknown>,
   ) {
+    const isLost = data?.isLost === true;
+    const priority = resolvePriority(type, isLost);
+    const expiresAt = resolveExpiresAt(priority);
+
+    const petId =
+      typeof data?.petId === 'string' ? new Types.ObjectId(data.petId) : null;
+
     return this.notificationModel.create({
       user: new Types.ObjectId(userId),
+      pet: petId,
       type,
       title,
       message,
       data,
+      priority,
+      expiresAt,
     });
   }
 
@@ -117,5 +132,56 @@ export class NotificationsService {
     }
 
     return notification;
+  }
+
+  // Read state never affects lifetime — this only stamps readAt on whatever
+  // is currently unread. Auto-expiry keeps running independently.
+  async markAllRead(userId: string) {
+    const result = await this.notificationModel.updateMany(
+      { user: new Types.ObjectId(userId), readAt: null },
+      { readAt: new Date() },
+    );
+
+    return { updated: result.modifiedCount };
+  }
+
+  // Users can delete a notification regardless of its priority — this bypasses
+  // expiresAt entirely, it's a direct removal.
+  async delete(userId: string, notificationId: string) {
+    const result = await this.notificationModel.findOneAndDelete({
+      _id: notificationId,
+      user: new Types.ObjectId(userId),
+    });
+
+    if (!result) {
+      throw new NotFoundException('Notification not found');
+    }
+
+    return { message: 'Notification deleted' };
+  }
+
+  async deleteMany(userId: string, ids: string[]) {
+    const result = await this.notificationModel.deleteMany({
+      _id: { $in: ids.map((id) => new Types.ObjectId(id)) },
+      user: new Types.ObjectId(userId),
+    });
+
+    return { deletedCount: result.deletedCount };
+  }
+
+  // Called when a pet is reported found: any CRITICAL (missing-context) scan
+  // or found-report notification for that pet is downgraded to STALE_MISSING
+  // and given a 1-day expiry, instead of staying pinned forever.
+  async resolveMissingContext(userId: string, petId: string) {
+    const expiresAt = resolveExpiresAt(NotificationPriority.STALE_MISSING);
+
+    await this.notificationModel.updateMany(
+      {
+        user: new Types.ObjectId(userId),
+        pet: new Types.ObjectId(petId),
+        priority: NotificationPriority.CRITICAL,
+      },
+      { priority: NotificationPriority.STALE_MISSING, expiresAt },
+    );
   }
 }

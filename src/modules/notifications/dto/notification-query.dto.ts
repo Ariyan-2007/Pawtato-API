@@ -1,6 +1,7 @@
 import { IsInt, IsOptional, Min } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiPropertyOptional } from '@nestjs/swagger';
+import { ParseOptionalBoolean } from '../../../common/decorators/parse-optional-boolean.decorator';
 
 export class NotificationQueryDto {
   @ApiPropertyOptional({ default: 1, minimum: 1 })
@@ -18,7 +19,6 @@ export class NotificationQueryDto {
   limit: number = 20;
 
   @ApiPropertyOptional({ description: 'Return only unread notifications' })
-  @IsOptional()
-  @Type(() => Boolean)
+  @ParseOptionalBoolean()
   unreadOnly?: boolean;
 }
