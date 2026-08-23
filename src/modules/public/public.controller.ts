@@ -94,9 +94,14 @@ export class PublicController {
         message: { type: 'string' },
         approxLocation: { type: 'string' },
         contactInfo: { type: 'string' },
+        deviceFingerprint: {
+          type: 'string',
+          description:
+            'Opaque client-generated id (e.g. a UUID persisted in localStorage) — required, used for spam rate-limiting.',
+        },
         photo: { type: 'string', format: 'binary' },
       },
-      required: ['message'],
+      required: ['message', 'deviceFingerprint'],
     },
   })
   @ApiResponse({
@@ -110,6 +115,11 @@ export class PublicController {
   @ApiResponse({
     status: 404,
     description: 'No tag found for this public code.',
+  })
+  @ApiResponse({
+    status: 429,
+    description:
+      'Too many reports from this device (same-tag cooldown or overall rate cap).',
   })
   @Throttle({ write: { limit: 5, ttl: 60_000 } })
   @Post('tags/:publicCode/found-report')

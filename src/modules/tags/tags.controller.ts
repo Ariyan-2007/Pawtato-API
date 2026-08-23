@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -36,7 +37,7 @@ import type { JwtPayload } from '../auth/interfaces/jwt-payload.interface';
 export class TagsController {
   constructor(private readonly tagsService: TagsService) {}
 
-  @ApiOperation({ summary: 'List the tag inventory (admin only)' })
+  @ApiOperation({ summary: 'List every tag in the system (admin only)' })
   @ApiResponse({ status: 200, description: 'Paginated list of tags.' })
   @UseGuards(RolesGuard)
   @Roles(UserRole.ADMIN)
@@ -46,11 +47,11 @@ export class TagsController {
   }
 
   @ApiOperation({
-    summary: "List tags currently assigned to the caller's own pets",
+    summary: 'List every tag the caller owns, regardless of status',
   })
   @ApiResponse({
     status: 200,
-    description: 'Array of tags assigned to the caller.',
+    description: 'Array of tags created by the caller.',
   })
   @Get('mine')
   findMine(@CurrentUser() user: JwtPayload) {
@@ -69,49 +70,70 @@ export class TagsController {
   }
 
   @ApiOperation({
-    summary: 'Create a new tag (admin only)',
+    summary: 'Create a new QR tag, owned by the caller',
     description:
-      'Seeds a new tag into inventory as immediately Available, and generates its QR image. ' +
-      "The QR image encodes the tag's public code and never changes across reassignments.",
+      'Self-service: generates a random public code, builds the full scan-landing URL from the ' +
+      'caller-supplied `redirectBaseUrl` plus that code, and renders/stores the QR image encoding it. ' +
+      "The tag starts unlinked (`AVAILABLE`) — use assign to link it to one of the caller's pets.",
   })
   @ApiResponse({ status: 201, description: 'Tag created.' })
-  @UseGuards(RolesGuard)
-  @Roles(UserRole.ADMIN)
   @Post()
-  create(@Body() dto: CreateTagDto) {
-    return this.tagsService.create(dto);
+  create(@CurrentUser() user: JwtPayload, @Body() dto: CreateTagDto) {
+    return this.tagsService.create(user.sub, dto);
   }
 
   @ApiOperation({
-    summary: "Assign an available tag to one of the caller's own pets",
+    summary: "Assign the caller's own tag to one of the caller's own pets",
   })
   @ApiResponse({ status: 200, description: 'Tag assigned.' })
   @ApiResponse({
     status: 400,
     description: 'Tag is not available, or the pet already has an active tag.',
   })
+  @ApiResponse({ status: 403, description: 'Caller does not own this tag.' })
   @ApiResponse({ status: 404, description: 'Tag or pet not found.' })
   @Post('assign')
   assign(@CurrentUser() user: JwtPayload, @Body() dto: AssignTagDto) {
-    return this.tagsService.assign(user.sub, dto);
+    return this.tagsService.assign(
+      user.sub,
+      dto,
+      (user.role as UserRole) === UserRole.ADMIN,
+    );
   }
 
   @ApiOperation({
-    summary: "Unassign a tag from the pet it's currently linked to",
-    description:
-      'Callable by the owner of the currently-assigned pet, or an admin.',
+    summary: "Unassign the caller's own tag from the pet it's linked to",
+    description: 'Callable by the tag owner, or an admin.',
   })
   @ApiResponse({ status: 200, description: 'Tag unassigned.' })
   @ApiResponse({ status: 400, description: 'Tag is not currently assigned.' })
-  @ApiResponse({
-    status: 404,
-    description: 'Tag not found, or not owned by the caller.',
-  })
+  @ApiResponse({ status: 403, description: 'Caller does not own this tag.' })
+  @ApiResponse({ status: 404, description: 'Tag not found.' })
   @Post('unassign')
   unassign(@CurrentUser() user: JwtPayload, @Body() dto: UnassignTagDto) {
     return this.tagsService.unassign(
       user.sub,
       dto,
+      (user.role as UserRole) === UserRole.ADMIN,
+    );
+  }
+
+  @ApiOperation({
+    summary: 'Permanently delete a tag the caller owns',
+    description:
+      'If the tag is currently linked to a pet, the link is cleared as part of the delete — ' +
+      'a scan of the physical sticker afterward resolves to "not linked" rather than the old pet. ' +
+      'Callable by the tag owner, or an admin.',
+  })
+  @ApiParam({ name: 'id', description: 'Tag ID' })
+  @ApiResponse({ status: 200, description: 'Tag deleted.' })
+  @ApiResponse({ status: 403, description: 'Caller does not own this tag.' })
+  @ApiResponse({ status: 404, description: 'Tag not found.' })
+  @Delete(':id')
+  remove(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.tagsService.delete(
+      user.sub,
+      id,
       (user.role as UserRole) === UserRole.ADMIN,
     );
   }

@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 
 import { FoundReportsController } from './found-reports.controller';
+import { TagFoundReportsController } from './tag-found-reports.controller';
 import { FoundReportsService } from './found-reports.service';
 import { FoundReport, FoundReportSchema } from './schemas/found-report.schema';
 
@@ -21,7 +22,7 @@ import { PetsModule } from '../pets/pets.module';
     PetsModule,
   ],
 
-  controllers: [FoundReportsController],
+  controllers: [FoundReportsController, TagFoundReportsController],
 
   providers: [FoundReportsService],
 

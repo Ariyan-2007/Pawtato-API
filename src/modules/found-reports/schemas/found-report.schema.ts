@@ -37,6 +37,15 @@ export class FoundReport {
   @Prop()
   photoUrl?: string;
 
+  // Opaque client-generated identifier (not tied to any account — this
+  // endpoint is anonymous/no-auth) used to rate-limit spam/abuse. See
+  // FoundReportsService.assertNotSpamming().
+  @Prop({
+    required: true,
+    index: true,
+  })
+  deviceFingerprint!: string;
+
   @Prop({
     default: () => new Date(),
   })

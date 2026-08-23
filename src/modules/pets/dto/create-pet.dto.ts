@@ -4,6 +4,7 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  MaxLength,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
@@ -40,6 +41,16 @@ export class CreatePetDto {
   @IsOptional()
   @IsNumber()
   weight?: number;
+
+  @ApiPropertyOptional({
+    example: 'Friendly but startles easily — approach calmly.',
+    description:
+      'One safety-relevant trait a stranger should know before approaching. Shown on the public scan profile.',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  notableTrait?: string;
 
   @ApiPropertyOptional({ example: false })
   @IsOptional()

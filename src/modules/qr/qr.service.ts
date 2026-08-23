@@ -1,5 +1,4 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import * as QRCode from 'qrcode';
 
 import { STORAGE_PROVIDER } from '../storage/storage.constants';
@@ -8,18 +7,16 @@ import type { StorageProvider } from '../storage/interfaces/storage-provider.int
 @Injectable()
 export class QrService {
   constructor(
-    private readonly configService: ConfigService,
-
     @Inject(STORAGE_PROVIDER)
     private readonly storageProvider: StorageProvider,
   ) {}
 
-  // Called once at tag creation; the image stays valid across reassignment since scans resolve tag -> current pet dynamically.
-  async generate(publicCode: string) {
-    const appUrl = this.configService.get<string>('app.url');
-    const qrUrl = `${appUrl}/api/public/tags/${publicCode}`;
-
-    const buffer = await QRCode.toBuffer(qrUrl, {
+  // Called once at tag creation; the image stays valid across reassignment
+  // since scans resolve tag -> current pet dynamically. `linkUrl` is built by
+  // the caller (TagsService), not this service — the frontend supplies the
+  // route it wants encoded, this just renders/stores the pixels.
+  async generate(publicCode: string, linkUrl: string) {
+    const buffer = await QRCode.toBuffer(linkUrl, {
       width: 400,
     });
 
@@ -34,5 +31,11 @@ export class QrService {
     });
 
     return this.storageProvider.getUrl(key);
+  }
+
+  // The storage key is deterministic from publicCode (see generate() above),
+  // so tag deletion doesn't need to persist it separately just to clean up.
+  async delete(publicCode: string) {
+    await this.storageProvider.delete(`qrcodes/${publicCode}.png`);
   }
 }

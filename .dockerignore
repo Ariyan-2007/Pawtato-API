@@ -3,7 +3,10 @@ dist
 coverage
 uploads
 .git
+.github
 .env
 .env.*
 !.env.example
 npm-debug.log*
+*.pdf
+*.md

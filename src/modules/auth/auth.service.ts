@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   Logger,
   UnauthorizedException,
@@ -12,27 +13,40 @@ import * as bcrypt from 'bcrypt';
 
 import { UsersService } from '../users/users.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { UserDocument } from '../users/schemas/user.schema';
+import { AccountStatus } from '../../common/enums/account-status.enum';
+import { isDuplicateKeyError } from '../../common/utils/mongo.util';
 
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
-import { VerifyEmailDto } from './dto/verify-email.dto';
-import { ResendVerificationDto } from './dto/resend-verification.dto';
+import { VerifyOtpDto } from './dto/verify-otp.dto';
+import { ResendOtpDto } from './dto/resend-otp.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { generateToken, hashToken } from './utils/token.util';
+import { generateOtp, hashOtp, otpHashesMatch } from './utils/otp.util';
+import { normalizeEmail } from './utils/email.util';
 import { describeUserAgent } from './utils/user-agent.util';
 import { formatDhakaDateTime } from './utils/date.util';
 import { extractEmailAddress } from '../../mail/mail-address.util';
 
-const EMAIL_VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
-const EMAIL_VERIFICATION_TTL_LABEL = '24 hours';
+const OTP_TTL_MS = 10 * 60 * 1000; // 10 minutes
+const OTP_TTL_LABEL = '10 minutes';
+const OTP_MAX_ATTEMPTS = 5;
+const OTP_RESEND_COOLDOWN_MS = 60 * 1000; // 60 seconds
+
 const PASSWORD_RESET_TTL_MS = 60 * 60 * 1000; // 1 hour
 const PASSWORD_RESET_TTL_LABEL = '1 hour';
 
 const GENERIC_RESET_MESSAGE =
   'If that email is registered, a password reset link has been sent.';
-const GENERIC_RESEND_MESSAGE =
-  'If that account exists and is unverified, a new verification link has been sent.';
+const GENERIC_RESEND_OTP_MESSAGE =
+  'If that account exists and needs verification, a new code has been sent.';
+const PENDING_VERIFICATION_MESSAGE = 'Verification code sent to your email.';
+const INVALID_CREDENTIALS_MESSAGE = 'Invalid email or password';
+const INVALID_OTP_MESSAGE = 'Invalid or expired OTP.';
+const OTP_ATTEMPTS_EXCEEDED_MESSAGE =
+  'Too many incorrect attempts. Please request a new verification code.';
 
 @Injectable()
 export class AuthService {
@@ -50,32 +64,68 @@ export class AuthService {
     private readonly notificationsService: NotificationsService,
   ) {}
 
-  async register(registerDto: RegisterDto) {
-    const user = await this.usersService.createUser(registerDto);
+  // Core business rule: an email exists in the system as either a pending
+  // (unverified) or active account, and it's never possible to end up with
+  // two accounts for the same normalized email. See handleExistingAccount()
+  // for how each pre-existing state is handled, and the catch block below
+  // for how a concurrent duplicate registration (the DB unique index losing
+  // the race) collapses into the same behavior instead of a 500.
+  async register(dto: RegisterDto) {
+    const email = normalizeEmail(dto.email);
+    const existing = await this.usersService.findByEmail(email);
 
-    await this.issueEmailVerificationToken(
-      user.id.toString(),
-      user.email,
-      user.fullName,
-    );
+    if (existing) {
+      return this.handleExistingAccountOnRegister(existing);
+    }
 
-    const payload = {
-      sub: user.id,
-      email: user.email,
-      role: user.role,
-    };
+    let user: UserDocument;
 
+    try {
+      user = await this.usersService.createUser({ ...dto, email });
+    } catch (error) {
+      if (isDuplicateKeyError(error)) {
+        const racedUser = await this.usersService.findByEmail(email);
+
+        if (racedUser) {
+          return this.handleExistingAccountOnRegister(racedUser);
+        }
+      }
+
+      throw error;
+    }
+
+    await this.issueOtp(user.id, user.email, user.fullName);
+
+    return this.pendingVerificationResponse(user.email);
+  }
+
+  private async handleExistingAccountOnRegister(user: UserDocument) {
+    if (user.status === AccountStatus.ACTIVE) {
+      throw new ConflictException('Email already registered.');
+    }
+
+    // Pending account: never create a second one. Re-trigger verification
+    // instead (subject to the same resend cooldown as an explicit
+    // resend-otp call, so double-clicking Register can't spam the mailbox).
+    await this.issueOtpIfCooldownElapsed(user);
+
+    return this.pendingVerificationResponse(user.email);
+  }
+
+  private pendingVerificationResponse(email: string) {
     return {
-      accessToken: await this.jwtService.signAsync(payload),
-      user,
+      message: PENDING_VERIFICATION_MESSAGE,
+      email,
+      status: AccountStatus.PENDING_VERIFICATION,
     };
   }
 
   async login(loginDto: LoginDto) {
-    const user = await this.usersService.findByEmail(loginDto.email);
+    const email = normalizeEmail(loginDto.email);
+    const user = await this.usersService.findByEmail(email);
 
     if (!user) {
-      throw new UnauthorizedException('Invalid email or password');
+      throw new UnauthorizedException(INVALID_CREDENTIALS_MESSAGE);
     }
 
     const isPasswordValid = await bcrypt.compare(
@@ -84,63 +134,103 @@ export class AuthService {
     );
 
     if (!isPasswordValid) {
-      throw new UnauthorizedException('Invalid email or password');
+      throw new UnauthorizedException(INVALID_CREDENTIALS_MESSAGE);
     }
 
-    const payload = {
-      sub: user.id,
-      email: user.email,
-      role: user.role,
-    };
+    // Credentials are valid, but a pending account must never receive an
+    // authenticated session — send a fresh OTP and let the frontend route
+    // to the verification screen instead. The response shape (no
+    // accessToken, `verificationRequired: true`) is how the frontend tells
+    // this apart from a normal successful login.
+    if (user.status === AccountStatus.PENDING_VERIFICATION) {
+      await this.issueOtpIfCooldownElapsed(user);
 
-    return {
-      accessToken: await this.jwtService.signAsync(payload),
-      user: {
-        id: user.id,
-        fullName: user.fullName,
+      return {
+        verificationRequired: true,
+        message:
+          'Your email is not verified yet. A verification code has been sent.',
         email: user.email,
-        role: user.role,
-        isEmailVerified: user.isEmailVerified,
-      },
-    };
+        status: AccountStatus.PENDING_VERIFICATION,
+      };
+    }
+
+    return this.buildAuthResponse(user);
   }
 
-  async verifyEmail(dto: VerifyEmailDto) {
-    const tokenHash = hashToken(dto.token);
-    const user = await this.usersService.findByVerificationTokenHash(tokenHash);
+  // Verifies the OTP for either flow (post-registration or triggered by a
+  // login attempt on a still-pending account) — both converge here, and
+  // success always activates the account and logs the user in immediately,
+  // so the frontend never has to send them back through login/OTP as two
+  // separate steps.
+  async verifyOtp(dto: VerifyOtpDto) {
+    const email = normalizeEmail(dto.email);
+    const user = await this.usersService.findByEmail(email);
 
     if (
       !user ||
-      !user.emailVerificationExpiresAt ||
-      user.emailVerificationExpiresAt.getTime() < Date.now()
+      user.status === AccountStatus.ACTIVE ||
+      !user.otpHash ||
+      !user.otpExpiresAt
     ) {
-      throw new BadRequestException('Invalid or expired verification link');
+      // Covers: unknown email, already-verified account, no OTP ever
+      // issued, and an OTP already consumed by a prior successful verify —
+      // all collapse to the same generic message so none of them can be
+      // told apart by an attacker probing the endpoint.
+      throw new BadRequestException(INVALID_OTP_MESSAGE);
     }
 
-    await this.usersService.markEmailVerified(user._id.toString());
+    if (user.otpExpiresAt.getTime() < Date.now()) {
+      throw new BadRequestException(INVALID_OTP_MESSAGE);
+    }
 
-    return { message: 'Email verified successfully.' };
+    if (user.otpAttempts >= OTP_MAX_ATTEMPTS) {
+      await this.usersService.clearOtp(user.id);
+      throw new BadRequestException(OTP_ATTEMPTS_EXCEEDED_MESSAGE);
+    }
+
+    const submittedHash = hashOtp(dto.otp);
+
+    if (!otpHashesMatch(submittedHash, user.otpHash)) {
+      await this.usersService.incrementOtpAttempts(user.id);
+      throw new BadRequestException(INVALID_OTP_MESSAGE);
+    }
+
+    const activatedUser = await this.usersService.activateAccount(user.id);
+
+    return this.buildAuthResponse(activatedUser!);
   }
 
-  async resendVerification(dto: ResendVerificationDto) {
-    const user = await this.usersService.findByEmail(dto.email);
+  async resendOtp(dto: ResendOtpDto) {
+    const email = normalizeEmail(dto.email);
+    const user = await this.usersService.findByEmail(email);
 
-    if (user && !user.isEmailVerified) {
-      await this.issueEmailVerificationToken(
-        user._id.toString(),
-        user.email,
-        user.fullName,
-      );
+    // Same anti-enumeration reasoning as forgotPassword: never reveal
+    // whether the email is registered or already verified.
+    if (!user || user.status === AccountStatus.ACTIVE) {
+      return { message: GENERIC_RESEND_OTP_MESSAGE };
     }
 
-    // Always return the same message whether or not the account exists (or
-    // is already verified) so this endpoint can't be used to enumerate
-    // registered emails.
-    return { message: GENERIC_RESEND_MESSAGE };
+    if (user.otpLastSentAt) {
+      const elapsedMs = Date.now() - user.otpLastSentAt.getTime();
+
+      if (elapsedMs < OTP_RESEND_COOLDOWN_MS) {
+        const waitSeconds = Math.ceil(
+          (OTP_RESEND_COOLDOWN_MS - elapsedMs) / 1000,
+        );
+
+        throw new BadRequestException(
+          `Please wait ${waitSeconds}s before requesting another code.`,
+        );
+      }
+    }
+
+    await this.issueOtp(user.id, user.email, user.fullName);
+
+    return { message: GENERIC_RESEND_OTP_MESSAGE };
   }
 
   async forgotPassword(dto: ForgotPasswordDto, userAgent?: string) {
-    const user = await this.usersService.findByEmail(dto.email);
+    const user = await this.usersService.findByEmail(normalizeEmail(dto.email));
 
     if (user) {
       const token = generateToken();
@@ -169,8 +259,8 @@ export class AuthService {
       );
     }
 
-    // Same reasoning as resendVerification: never reveal whether the email
-    // is registered.
+    // Same reasoning as resendOtp: never reveal whether the email is
+    // registered.
     return { message: GENERIC_RESET_MESSAGE };
   }
 
@@ -209,34 +299,66 @@ export class AuthService {
     return { message: 'Password reset successfully. You can now log in.' };
   }
 
-  private async issueEmailVerificationToken(
-    userId: string,
-    email: string,
-    fullName: string,
-  ) {
-    const token = generateToken();
-    const tokenHash = hashToken(token);
-    const expiresAt = new Date(Date.now() + EMAIL_VERIFICATION_TTL_MS);
+  private async buildAuthResponse(user: UserDocument) {
+    const payload = {
+      sub: user.id,
+      email: user.email,
+      role: user.role,
+    };
 
-    await this.usersService.setEmailVerificationToken(
-      userId,
-      tokenHash,
-      expiresAt,
-    );
+    return {
+      accessToken: await this.jwtService.signAsync(payload),
+      user: {
+        id: user.id,
+        fullName: user.fullName,
+        email: user.email,
+        role: user.role,
+        status: user.status,
+      },
+    };
+  }
 
-    const verifyUrl = this.buildFrontendUrl('/verify', { token });
+  // Sends a fresh OTP unconditionally — used for a brand-new registration
+  // and for an explicit resend-otp request (both are single user-initiated
+  // actions that deserve a direct outcome, cooldown enforcement for resend
+  // already having happened in the caller).
+  private async issueOtp(userId: string, email: string, fullName: string) {
+    const otp = generateOtp();
+    const otpHash = hashOtp(otp);
+    const expiresAt = new Date(Date.now() + OTP_TTL_MS);
+
+    await this.usersService.setOtp(userId, otpHash, expiresAt);
 
     await this.sendTemplateEmail(
       email,
-      'Verify your email to activate your Pawtato tags',
-      'verify-email',
+      'Your Pawtato verification code',
+      'verify-otp',
       {
         name: fullName,
-        verifyUrl,
-        expiresIn: EMAIL_VERIFICATION_TTL_LABEL,
+        otp,
+        expiresIn: OTP_TTL_LABEL,
         supportEmail: this.supportEmail,
       },
     );
+  }
+
+  // Used where sending a new OTP is a side effect of something else the
+  // user did (restarting registration, logging into a still-pending
+  // account) rather than a deliberate "resend" click — silently skips
+  // sending if the last OTP is still within its cooldown window instead of
+  // erroring, since a recent code is presumably already sitting in their
+  // inbox and a double-submit (e.g. a double-clicked button) shouldn't
+  // trigger a duplicate email.
+  private async issueOtpIfCooldownElapsed(user: UserDocument) {
+    if (user.otpLastSentAt) {
+      const elapsedMs = Date.now() - user.otpLastSentAt.getTime();
+
+      if (elapsedMs < OTP_RESEND_COOLDOWN_MS) {
+        return;
+      }
+    }
+
+    await this.issueOtp(user.id, user.email, user.fullName);
   }
 
   // A failed email send must never fail the request that already succeeded

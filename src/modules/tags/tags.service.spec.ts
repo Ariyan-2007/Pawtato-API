@@ -1,22 +1,67 @@
+import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getModelToken } from '@nestjs/mongoose';
 import { EventEmitter2 } from '@nestjs/event-emitter';
+import { Types } from 'mongoose';
+
 import { TagsService } from './tags.service';
 import { Tag } from './schemas/tag.schema';
 import { PetsService } from '../pets/pets.service';
 import { QrService } from '../qr/qr.service';
+import { TagStatus } from '../../common/enums/tag-status.enum';
 
 describe('TagsService', () => {
   let service: TagsService;
+  let tagModel: {
+    create: jest.Mock;
+    find: jest.Mock;
+    findOne: jest.Mock;
+    findById: jest.Mock;
+    findByIdAndDelete: jest.Mock;
+  };
+  let petsService: { findOwnedPet: jest.Mock; findByIdAdmin: jest.Mock };
+  let qrService: { generate: jest.Mock; delete: jest.Mock };
+  let eventEmitter: { emit: jest.Mock };
+
+  const ownerId = new Types.ObjectId().toString();
+  const otherOwnerId = new Types.ObjectId().toString();
+
+  function makeTag(overrides: Record<string, unknown> = {}) {
+    return {
+      _id: new Types.ObjectId(),
+      publicCode: 'ABC123',
+      linkUrl: 'https://pawtato.ariyan.app/qr/ABC123',
+      qrImageUrl: '/uploads/qrcodes/ABC123.png',
+      ownerId: new Types.ObjectId(ownerId),
+      status: TagStatus.AVAILABLE,
+      assignedPetId: null,
+      save: jest.fn().mockResolvedValue(undefined),
+      ...overrides,
+    };
+  }
 
   beforeEach(async () => {
+    tagModel = {
+      create: jest.fn(),
+      find: jest.fn(),
+      findOne: jest.fn(),
+      findById: jest.fn(),
+      findByIdAndDelete: jest.fn(),
+    };
+    petsService = { findOwnedPet: jest.fn(), findByIdAdmin: jest.fn() };
+    qrService = {
+      generate: jest.fn().mockResolvedValue('/uploads/qrcodes/ABC123.png'),
+      delete: jest.fn().mockResolvedValue(undefined),
+    };
+    eventEmitter = { emit: jest.fn() };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         TagsService,
-        { provide: getModelToken(Tag.name), useValue: {} },
-        { provide: PetsService, useValue: {} },
-        { provide: QrService, useValue: {} },
-        { provide: EventEmitter2, useValue: {} },
+        { provide: getModelToken(Tag.name), useValue: tagModel },
+        { provide: PetsService, useValue: petsService },
+        { provide: QrService, useValue: qrService },
+        { provide: EventEmitter2, useValue: eventEmitter },
       ],
     }).compile();
 
@@ -25,5 +70,214 @@ describe('TagsService', () => {
 
   it('should be defined', () => {
     expect(service).toBeDefined();
+  });
+
+  describe('create', () => {
+    it('builds the link from the caller-supplied base + generated code, and owns it to the caller', async () => {
+      tagModel.create.mockImplementation((doc: Record<string, unknown>) =>
+        Promise.resolve(doc),
+      );
+
+      const tag = await service.create(ownerId, {
+        redirectBaseUrl: 'https://pawtato.ariyan.app/qr/',
+      });
+
+      expect(qrService.generate).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.stringMatching(
+          /^https:\/\/pawtato\.ariyan\.app\/qr\/[A-Za-z0-9_-]+$/,
+        ),
+      );
+      expect(tagModel.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: TagStatus.AVAILABLE,
+          ownerId: expect.any(Types.ObjectId) as Types.ObjectId,
+        }),
+      );
+      expect((tag as { linkUrl: string }).linkUrl).toMatch(
+        /^https:\/\/pawtato\.ariyan\.app\/qr\//,
+      );
+    });
+
+    it('normalizes a trailing slash so the link never ends up with a double slash', async () => {
+      tagModel.create.mockImplementation((doc: Record<string, unknown>) =>
+        Promise.resolve(doc),
+      );
+
+      await service.create(ownerId, {
+        redirectBaseUrl: 'https://pawtato.ariyan.app/qr///',
+      });
+
+      const [, linkUrl] = qrService.generate.mock.calls[0] as [string, string];
+      expect(linkUrl.includes('//qr//')).toBe(false);
+    });
+
+    it('retries with a fresh code on a publicCode collision instead of failing the request', async () => {
+      const duplicateKeyError = Object.assign(new Error('E11000'), {
+        code: 11000,
+      });
+      tagModel.create
+        .mockRejectedValueOnce(duplicateKeyError)
+        .mockImplementationOnce((doc: Record<string, unknown>) =>
+          Promise.resolve(doc),
+        );
+
+      const tag = await service.create(ownerId, {
+        redirectBaseUrl: 'https://pawtato.ariyan.app/qr/',
+      });
+
+      expect(tagModel.create).toHaveBeenCalledTimes(2);
+      expect(qrService.generate).toHaveBeenCalledTimes(2);
+      expect(qrService.delete).toHaveBeenCalledTimes(1);
+      expect(tag).toBeDefined();
+    });
+
+    it('does not mask a non-collision failure behind a retry', async () => {
+      tagModel.create.mockRejectedValue(new Error('database is down'));
+
+      await expect(
+        service.create(ownerId, {
+          redirectBaseUrl: 'https://pawtato.ariyan.app/qr/',
+        }),
+      ).rejects.toThrow('database is down');
+      expect(tagModel.create).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('findMine', () => {
+    it('returns every tag owned by the caller regardless of status', async () => {
+      const sort = jest.fn().mockResolvedValue([makeTag()]);
+      tagModel.find.mockReturnValue({ sort });
+
+      await service.findMine(ownerId);
+
+      expect(tagModel.find).toHaveBeenCalledWith({
+        ownerId: expect.any(Types.ObjectId) as Types.ObjectId,
+      });
+    });
+  });
+
+  describe('assign', () => {
+    it('rejects assigning a tag the caller does not own', async () => {
+      tagModel.findOne.mockResolvedValue(makeTag());
+
+      await expect(
+        service.assign(
+          otherOwnerId,
+          { publicCode: 'ABC123', petId: 'p1' },
+          false,
+        ),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('allows an admin to assign a tag they do not own', async () => {
+      const tag = makeTag();
+      tagModel.findOne
+        .mockResolvedValueOnce(tag) // tag lookup
+        .mockResolvedValueOnce(null); // no existing active tag on the pet
+      petsService.findOwnedPet.mockResolvedValue({
+        _id: new Types.ObjectId(),
+        name: 'Fido',
+      });
+
+      await service.assign(
+        otherOwnerId,
+        { publicCode: 'ABC123', petId: 'p1' },
+        true,
+      );
+
+      expect(tag.status).toBe(TagStatus.ASSIGNED);
+    });
+  });
+
+  describe('unassign', () => {
+    it('rejects unassigning a tag the caller does not own', async () => {
+      tagModel.findOne.mockResolvedValue(
+        makeTag({
+          status: TagStatus.ASSIGNED,
+          assignedPetId: new Types.ObjectId(),
+        }),
+      );
+
+      await expect(
+        service.unassign(otherOwnerId, { publicCode: 'ABC123' }, false),
+      ).rejects.toThrow(ForbiddenException);
+    });
+  });
+
+  describe('delete', () => {
+    it('rejects deleting a tag the caller does not own', async () => {
+      tagModel.findById.mockResolvedValue(makeTag());
+
+      await expect(
+        service.delete(otherOwnerId, 'tag-id', false),
+      ).rejects.toThrow(ForbiddenException);
+      expect(qrService.delete).not.toHaveBeenCalled();
+    });
+
+    it('deletes the tag and its QR image when the caller owns it', async () => {
+      const tag = makeTag();
+      tagModel.findById.mockResolvedValue(tag);
+
+      const result = await service.delete(ownerId, 'tag-id', false);
+
+      expect(qrService.delete).toHaveBeenCalledWith(tag.publicCode);
+      expect(tagModel.findByIdAndDelete).toHaveBeenCalledWith(tag._id);
+      expect(result).toEqual({ message: 'Tag deleted successfully' });
+    });
+
+    it('unassigns from the pet as part of deleting a currently-linked tag', async () => {
+      const petId = new Types.ObjectId();
+      const tag = makeTag({ status: TagStatus.ASSIGNED, assignedPetId: petId });
+      tagModel.findById.mockResolvedValue(tag);
+      petsService.findByIdAdmin.mockResolvedValue({
+        _id: petId,
+        name: 'Fido',
+        owner: ownerId,
+      });
+
+      await service.delete(ownerId, 'tag-id', false);
+
+      expect(eventEmitter.emit).toHaveBeenCalledWith(
+        'tag.unassigned',
+        expect.objectContaining({ petId: petId.toString() }),
+      );
+    });
+
+    it('throws NotFoundException for an unknown tag id', async () => {
+      tagModel.findById.mockResolvedValue(null);
+
+      await expect(service.delete(ownerId, 'missing', false)).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+  });
+
+  describe('findOwnedById', () => {
+    it('returns the tag when the caller owns it', async () => {
+      const tag = makeTag();
+      tagModel.findById.mockResolvedValue(tag);
+
+      await expect(
+        service.findOwnedById(ownerId, 'tag-id', false),
+      ).resolves.toBe(tag);
+    });
+
+    it('rejects when the caller does not own it and is not an admin', async () => {
+      tagModel.findById.mockResolvedValue(makeTag());
+
+      await expect(
+        service.findOwnedById(otherOwnerId, 'tag-id', false),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('allows an admin regardless of ownership', async () => {
+      const tag = makeTag();
+      tagModel.findById.mockResolvedValue(tag);
+
+      await expect(
+        service.findOwnedById(otherOwnerId, 'tag-id', true),
+      ).resolves.toBe(tag);
+    });
   });
 });

@@ -5,6 +5,7 @@ import { ExtractJwt, Strategy } from 'passport-jwt';
 
 import { JwtPayload } from '../interfaces/jwt-payload.interface';
 import { UsersService } from '../../users/users.service';
+import { AccountStatus } from '../../../common/enums/account-status.enum';
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
@@ -22,7 +23,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   async validate(payload: JwtPayload) {
     const user = await this.usersService.findAuthState(payload.sub);
 
-    if (!user || !user.isActive) {
+    if (!user || !user.isActive || user.status !== AccountStatus.ACTIVE) {
       throw new UnauthorizedException();
     }
 
