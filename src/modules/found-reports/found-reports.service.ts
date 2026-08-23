@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
+import { EventEmitter2 } from '@nestjs/event-emitter';
+import { Model, Types } from 'mongoose';
 
 import {
   FoundReport,
@@ -9,13 +10,13 @@ import {
 import { CreateFoundReportDto } from './dto/create-found-report.dto';
 import { TagsService } from '../tags/tags.service';
 import { PetsService } from '../pets/pets.service';
-import { NotificationsService } from '../notifications/notifications.service';
 import { TagStatus } from '../../common/enums/tag-status.enum';
 import { User } from '../users/schemas/user.schema';
 import { PetDocument } from '../pets/schemas/pet.schema';
+import { DOMAIN_EVENTS } from '../../common/events/domain-events';
 
 interface PetWithOwner extends Omit<PetDocument, 'owner'> {
-  owner: User;
+  owner: User & { _id: Types.ObjectId };
 }
 
 @Injectable()
@@ -28,7 +29,7 @@ export class FoundReportsService {
 
     private readonly tagsService: TagsService,
     private readonly petsService: PetsService,
-    private readonly notificationsService: NotificationsService,
+    private readonly eventEmitter: EventEmitter2,
   ) {}
 
   async create(
@@ -53,33 +54,37 @@ export class FoundReportsService {
       photoUrl,
     });
 
-    // The report is already saved at this point — a failed notification must
+    // The report is already saved at this point — a failed owner lookup must
     // never turn into a failure response for a finder who already succeeded.
-    await this.notifyOwner(tag.assignedPetId.toString(), report);
+    await this.emitCreatedEvent(tag.assignedPetId.toString(), report);
 
     return report;
   }
 
-  private async notifyOwner(petId: string, report: FoundReportDocument) {
+  private async emitCreatedEvent(petId: string, report: FoundReportDocument) {
     try {
       const pet = (await this.petsService.findWithOwner(
         petId,
       )) as PetWithOwner | null;
 
       const ownerEmail = pet?.owner?.email;
+      const ownerId = pet?.owner?._id;
 
-      if (!pet || !ownerEmail) {
+      if (!pet || !ownerEmail || !ownerId) {
         return;
       }
 
-      await this.notificationsService.sendEmail(
+      this.eventEmitter.emit(DOMAIN_EVENTS.FOUND_REPORT_CREATED, {
+        ownerId: String(ownerId),
         ownerEmail,
-        `Someone may have found ${pet.name}!`,
-        report.message,
-      );
+        petId,
+        petName: pet.name,
+        foundReportId: String(report._id),
+        message: report.message,
+      });
     } catch (error) {
       this.logger.error(
-        `Failed to notify owner for found report ${String(report._id)}`,
+        `Failed to emit found-report.created for report ${String(report._id)}`,
         error instanceof Error ? error.stack : undefined,
       );
     }

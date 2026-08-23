@@ -30,7 +30,7 @@ export class PublicService {
     }
 
     if (tag.status === TagStatus.RETIRED) {
-      await this.scansService.record(tag._id, null, userAgent);
+      await this.scansService.record(tag._id, null, tag.publicCode, userAgent);
 
       return {
         tagStatus: TagStatus.RETIRED,
@@ -39,7 +39,7 @@ export class PublicService {
     }
 
     if (tag.status === TagStatus.SUSPENDED) {
-      await this.scansService.record(tag._id, null, userAgent);
+      await this.scansService.record(tag._id, null, tag.publicCode, userAgent);
 
       return {
         tagStatus: TagStatus.SUSPENDED,
@@ -48,7 +48,7 @@ export class PublicService {
     }
 
     if (tag.status !== TagStatus.ASSIGNED || !tag.assignedPetId) {
-      await this.scansService.record(tag._id, null, userAgent);
+      await this.scansService.record(tag._id, null, tag.publicCode, userAgent);
 
       return {
         tagStatus: tag.status,
@@ -69,7 +69,12 @@ export class PublicService {
       throw new NotFoundException('Pet not found');
     }
 
-    await this.scansService.record(tag._id, tag.assignedPetId, userAgent);
+    await this.scansService.record(
+      tag._id,
+      tag.assignedPetId,
+      tag.publicCode,
+      userAgent,
+    );
 
     return {
       tagStatus: TagStatus.ASSIGNED,

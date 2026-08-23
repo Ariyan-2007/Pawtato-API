@@ -72,7 +72,10 @@ async function bootstrap() {
     .addTag('Found Reports', "Finder reports submitted against a pet's tag")
     .addTag('Medical Records', "A pet's medical history")
     .addTag('Vaccinations', "A pet's vaccination records and reminders")
-    .addTag('Notifications', 'Email notification triggers')
+    .addTag(
+      'Notifications',
+      "The caller's in-app notification feed (list, mark as read)",
+    )
     .addTag('Admin', 'Admin-only dashboard, user, and pet management')
     .addTag('Activity', 'Admin action audit log')
     .addTag('Health', 'Liveness check')

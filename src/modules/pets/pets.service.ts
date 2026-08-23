@@ -1,17 +1,22 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { QueryFilter, Model, Types } from 'mongoose';
 import { Pet, PetDocument } from './schemas/pet.schema';
 import { CreatePetDto } from './dto/create-pet.dto';
 import { UpdatePetDto } from './dto/update-pet.dto';
 import { AdminPetQueryDto } from '../admin/dto/admin-pet-query.dto';
 import { ReportLostDto } from './dto/report-lost.dto';
+import { User } from '../users/schemas/user.schema';
+import { DOMAIN_EVENTS } from '../../common/events/domain-events';
 
 @Injectable()
 export class PetsService {
   constructor(
     @InjectModel(Pet.name)
     private readonly petModel: Model<PetDocument>,
+
+    private readonly eventEmitter: EventEmitter2,
   ) {}
 
   async create(ownerId: string, createPetDto: CreatePetDto) {
@@ -100,6 +105,8 @@ export class PetsService {
       throw new NotFoundException('Pet not found');
     }
 
+    await this.emitOwnerEvent(DOMAIN_EVENTS.PET_MARKED_LOST, ownerId, pet);
+
     return pet;
   }
 
@@ -125,7 +132,33 @@ export class PetsService {
       throw new NotFoundException('Pet not found');
     }
 
+    await this.emitOwnerEvent(DOMAIN_EVENTS.PET_MARKED_FOUND, ownerId, pet);
+
     return pet;
+  }
+
+  // A failed populate/emit must never fail the request that already succeeded.
+  private async emitOwnerEvent(
+    event:
+      | typeof DOMAIN_EVENTS.PET_MARKED_LOST
+      | typeof DOMAIN_EVENTS.PET_MARKED_FOUND,
+    ownerId: string,
+    pet: PetDocument,
+  ) {
+    try {
+      await pet.populate('owner', 'email');
+
+      const ownerEmail = (pet.owner as unknown as User).email;
+
+      this.eventEmitter.emit(event, {
+        ownerId,
+        ownerEmail,
+        petId: pet._id.toString(),
+        petName: pet.name,
+      });
+    } catch {
+      // Population failure shouldn't block the response; the notification is best-effort.
+    }
   }
 
   async getStatistics(ownerId: string) {

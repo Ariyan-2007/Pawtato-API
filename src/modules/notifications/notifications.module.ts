@@ -1,16 +1,29 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { MailerModule } from '@nestjs-modules/mailer';
+import { MongooseModule } from '@nestjs/mongoose';
 
 import { NotificationsController } from './notifications.controller';
 import { NotificationsService } from './notifications.service';
 import { VaccinationReminderJob } from './jobs/vaccination-reminder.job';
+import {
+  Notification,
+  NotificationSchema,
+} from './schemas/notification.schema';
+import { EmailChannel } from './channels/email.channel';
+import { DomainEventsListener } from './listeners/domain-events.listener';
+import { NOTIFICATION_CHANNELS } from './notifications.constants';
+import { NotificationChannel } from './interfaces/notification-channel.interface';
 
 import { VaccinationsModule } from '../vaccinations/vaccinations.module';
 
 @Module({
   imports: [
     VaccinationsModule,
+
+    MongooseModule.forFeature([
+      { name: Notification.name, schema: NotificationSchema },
+    ]),
 
     MailerModule.forRootAsync({
       imports: [ConfigModule],
@@ -34,7 +47,17 @@ import { VaccinationsModule } from '../vaccinations/vaccinations.module';
 
   controllers: [NotificationsController],
 
-  providers: [NotificationsService, VaccinationReminderJob],
+  providers: [
+    NotificationsService,
+    VaccinationReminderJob,
+    EmailChannel,
+    DomainEventsListener,
+    {
+      provide: NOTIFICATION_CHANNELS,
+      useFactory: (email: EmailChannel): NotificationChannel[] => [email],
+      inject: [EmailChannel],
+    },
+  ],
 
   exports: [NotificationsService],
 })
