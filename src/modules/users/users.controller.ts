@@ -1,4 +1,11 @@
-import { Body, Controller, Get, Patch, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Inject,
+  Patch,
+  UseGuards,
+} from '@nestjs/common';
 
 import {
   ApiBearerAuth,
@@ -10,22 +17,30 @@ import { Post, UploadedFile, UseInterceptors } from '@nestjs/common';
 
 import { FileInterceptor } from '@nestjs/platform-express';
 
-import { diskStorage } from 'multer';
-
-import { extname } from 'path';
 import { UsersService } from './users.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import type { JwtPayload } from '../auth/interfaces/jwt-payload.interface';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { ApiBody, ApiConsumes } from '@nestjs/swagger';
+import {
+  imageFileFilter,
+  MAX_IMAGE_SIZE_BYTES,
+  STORAGE_PROVIDER,
+} from '../storage/storage.constants';
+import type { StorageProvider } from '../storage/interfaces/storage-provider.interface';
 
 @ApiTags('Users')
 @ApiBearerAuth('JWT-auth')
 @UseGuards(JwtAuthGuard)
 @Controller('users')
 export class UsersController {
-  constructor(private readonly usersService: UsersService) {}
+  constructor(
+    private readonly usersService: UsersService,
+
+    @Inject(STORAGE_PROVIDER)
+    private readonly storageProvider: StorageProvider,
+  ) {}
 
   @ApiOperation({ summary: "Get the current user's profile" })
   @ApiResponse({ status: 200, description: 'The user profile.' })
@@ -63,23 +78,24 @@ export class UsersController {
   @Post('avatar')
   @UseInterceptors(
     FileInterceptor('file', {
-      storage: diskStorage({
-        destination: './uploads/avatars',
-        filename: (req, file, callback) => {
-          const uniqueName = Date.now() + '-' + Math.round(Math.random() * 1e9);
-
-          callback(null, uniqueName + extname(file.originalname));
-        },
-      }),
+      limits: { fileSize: MAX_IMAGE_SIZE_BYTES },
+      fileFilter: imageFileFilter,
     }),
   )
   async uploadAvatar(
     @CurrentUser() user: JwtPayload,
     @UploadedFile() file: Express.Multer.File,
   ) {
+    const key = await this.storageProvider.upload({
+      buffer: file.buffer,
+      folder: 'avatars',
+      originalName: file.originalname,
+      mimetype: file.mimetype,
+    });
+
     const updatedUser = await this.usersService.updateAvatar(
       user.sub,
-      `/uploads/avatars/${file.filename}`,
+      this.storageProvider.getUrl(key),
     );
 
     return {

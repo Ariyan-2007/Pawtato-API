@@ -3,14 +3,21 @@ import {
   Controller,
   Delete,
   Get,
+  Inject,
   Param,
   Patch,
   Post,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
+
+import { FileInterceptor } from '@nestjs/platform-express';
 
 import {
   ApiBearerAuth,
+  ApiBody,
+  ApiConsumes,
   ApiOperation,
   ApiParam,
   ApiResponse,
@@ -23,13 +30,24 @@ import type { JwtPayload } from '../auth/interfaces/jwt-payload.interface';
 import { CreatePetDto } from './dto/create-pet.dto';
 import { UpdatePetDto } from './dto/update-pet.dto';
 import { ReportLostDto } from './dto/report-lost.dto';
+import {
+  imageFileFilter,
+  MAX_IMAGE_SIZE_BYTES,
+  STORAGE_PROVIDER,
+} from '../storage/storage.constants';
+import type { StorageProvider } from '../storage/interfaces/storage-provider.interface';
 
 @ApiTags('Pets')
 @ApiBearerAuth('JWT-auth')
 @UseGuards(JwtAuthGuard)
 @Controller('pets')
 export class PetsController {
-  constructor(private readonly petsService: PetsService) {}
+  constructor(
+    private readonly petsService: PetsService,
+
+    @Inject(STORAGE_PROVIDER)
+    private readonly storageProvider: StorageProvider,
+  ) {}
 
   @ApiOperation({ summary: "List the current user's pets" })
   @ApiResponse({
@@ -94,6 +112,58 @@ export class PetsController {
     updatePetDto: UpdatePetDto,
   ) {
     return this.petsService.update(user.sub, petId, updatePetDto);
+  }
+
+  @ApiOperation({ summary: "Upload a pet's profile photo" })
+  @ApiParam({ name: 'id', description: 'Pet ID' })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        file: { type: 'string', format: 'binary' },
+      },
+      required: ['file'],
+    },
+  })
+  @ApiResponse({ status: 201, description: 'Photo uploaded.' })
+  @ApiResponse({
+    status: 404,
+    description: 'Pet not found or not owned by the caller.',
+  })
+  @Post(':id/photo')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: { fileSize: MAX_IMAGE_SIZE_BYTES },
+      fileFilter: imageFileFilter,
+    }),
+  )
+  async uploadPhoto(
+    @CurrentUser() user: JwtPayload,
+
+    @Param('id')
+    petId: string,
+
+    @UploadedFile()
+    file: Express.Multer.File,
+  ) {
+    const key = await this.storageProvider.upload({
+      buffer: file.buffer,
+      folder: 'pets',
+      originalName: file.originalname,
+      mimetype: file.mimetype,
+    });
+
+    const pet = await this.petsService.updatePhoto(
+      user.sub,
+      petId,
+      this.storageProvider.getUrl(key),
+    );
+
+    return {
+      message: 'Photo uploaded successfully',
+      profileImage: pet.profileImage,
+    };
   }
 
   @ApiOperation({ summary: 'Delete a pet owned by the current user' })
