@@ -77,4 +77,20 @@ export class S3StorageProvider implements StorageProvider {
       new DeleteObjectCommand({ Bucket: this.bucket, Key: key }),
     );
   }
+
+  async deleteByUrl(url: string): Promise<void> {
+    const key = this.getKeyFromUrl(url);
+
+    if (key) {
+      await this.delete(key);
+    }
+  }
+
+  private getKeyFromUrl(url: string): string | null {
+    const prefix = this.publicUrl
+      ? `${this.publicUrl.replace(/\/$/, '')}/`
+      : `https://${this.bucket}.s3.${this.region}.amazonaws.com/`;
+
+    return url.startsWith(prefix) ? url.slice(prefix.length) : null;
+  }
 }

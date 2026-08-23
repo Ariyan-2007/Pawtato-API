@@ -61,6 +61,7 @@ export class ScansService {
         publicCode,
         petId: petId.toString(),
         petName: pet.name,
+        isLost: pet.isLost,
       });
     } catch (error) {
       this.logger.error(

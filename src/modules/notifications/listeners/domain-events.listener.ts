@@ -69,6 +69,21 @@ export class DomainEventsListener {
     await this.handle(DOMAIN_EVENTS.PET_MARKED_FOUND, event.ownerId, {
       ...event,
     });
+
+    // Any scan/found-report notification pinned as CRITICAL while this pet
+    // was missing is now stale — downgrade it so it clears in a day instead
+    // of staying pinned forever.
+    try {
+      await this.notificationsService.resolveMissingContext(
+        event.ownerId,
+        event.petId,
+      );
+    } catch (error) {
+      this.logger.error(
+        `Failed to resolve missing-context notifications for pet ${event.petId}`,
+        error instanceof Error ? error.stack : undefined,
+      );
+    }
   }
 
   @OnEvent(DOMAIN_EVENTS.TAG_ASSIGNED)

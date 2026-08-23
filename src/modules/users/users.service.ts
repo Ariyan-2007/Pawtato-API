@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 
 import { InjectModel } from '@nestjs/mongoose';
 
@@ -14,14 +14,21 @@ import { UpdateProfileDto } from './dto/update-profile.dto';
 import { UserRole } from '../../common/enums/user-role.enum';
 import { AccountStatus } from '../../common/enums/account-status.enum';
 import { AdminUserQueryDto } from '../admin/dto/admin-user-query.dto';
+import { STORAGE_PROVIDER } from '../storage/storage.constants';
+import type { StorageProvider } from '../storage/interfaces/storage-provider.interface';
 
 @Injectable()
 export class UsersService {
+  private readonly logger = new Logger(UsersService.name);
+
   constructor(
     @InjectModel(User.name)
     private readonly userModel: Model<UserDocument>,
     @InjectModel(Pet.name)
     private readonly petModel: Model<PetDocument>,
+
+    @Inject(STORAGE_PROVIDER)
+    private readonly storageProvider: StorageProvider,
   ) {}
 
   // No pre-insert existence check here by design — AuthService already
@@ -145,7 +152,10 @@ export class UsersService {
   }
 
   async updateAvatar(userId: string, avatar: string) {
-    return this.userModel.findByIdAndUpdate(
+    const existing = await this.userModel.findById(userId).select('avatar');
+    const previousAvatar = existing?.avatar;
+
+    const user = await this.userModel.findByIdAndUpdate(
       userId,
       {
         avatar,
@@ -154,6 +164,39 @@ export class UsersService {
         new: true,
       },
     );
+
+    // The new avatar is already linked at this point — only now is it safe
+    // to remove the old file. A failed cleanup shouldn't fail an otherwise
+    // successful upload; it just leaves an orphaned object behind.
+    await this.deleteOldAvatar(previousAvatar);
+
+    return user;
+  }
+
+  async removeAvatar(userId: string) {
+    const existing = await this.userModel.findById(userId).select('avatar');
+    const previousAvatar = existing?.avatar;
+
+    await this.userModel.findByIdAndUpdate(userId, { avatar: '' });
+
+    await this.deleteOldAvatar(previousAvatar);
+
+    return { message: 'Avatar removed successfully' };
+  }
+
+  private async deleteOldAvatar(url?: string | null) {
+    if (!url) {
+      return;
+    }
+
+    try {
+      await this.storageProvider.deleteByUrl(url);
+    } catch (error) {
+      this.logger.error(
+        `Failed to delete previous avatar: ${url}`,
+        error instanceof Error ? error.stack : undefined,
+      );
+    }
   }
 
   async count(): Promise<number> {

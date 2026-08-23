@@ -52,6 +52,9 @@ export interface QrTagScannedEvent {
   publicCode: string;
   petId: string;
   petName: string;
+  // Pet's isLost flag at scan time — decides notification priority/lifetime
+  // (see notifications/utils/notification-priority.util.ts).
+  isLost: boolean;
 }
 
 export interface FoundReportCreatedEvent {
@@ -61,6 +64,9 @@ export interface FoundReportCreatedEvent {
   petName: string;
   foundReportId: string;
   message: string;
+  // Pet's isLost flag at report time — decides notification priority/lifetime
+  // (see notifications/utils/notification-priority.util.ts).
+  isLost: boolean;
 }
 
 export interface VaccinationReminderDueEvent {

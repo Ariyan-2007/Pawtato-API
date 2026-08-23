@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { QueryFilter, Model, Types } from 'mongoose';
@@ -9,14 +9,21 @@ import { AdminPetQueryDto } from '../admin/dto/admin-pet-query.dto';
 import { ReportLostDto } from './dto/report-lost.dto';
 import { User } from '../users/schemas/user.schema';
 import { DOMAIN_EVENTS } from '../../common/events/domain-events';
+import { STORAGE_PROVIDER } from '../storage/storage.constants';
+import type { StorageProvider } from '../storage/interfaces/storage-provider.interface';
 
 @Injectable()
 export class PetsService {
+  private readonly logger = new Logger(PetsService.name);
+
   constructor(
     @InjectModel(Pet.name)
     private readonly petModel: Model<PetDocument>,
 
     private readonly eventEmitter: EventEmitter2,
+
+    @Inject(STORAGE_PROVIDER)
+    private readonly storageProvider: StorageProvider,
   ) {}
 
   async create(ownerId: string, createPetDto: CreatePetDto) {
@@ -71,6 +78,16 @@ export class PetsService {
   }
 
   async updatePhoto(ownerId: string, petId: string, profileImage: string) {
+    const existing = await this.petModel
+      .findOne({ _id: petId, owner: new Types.ObjectId(ownerId) })
+      .select('profileImage');
+
+    if (!existing) {
+      throw new NotFoundException('Pet not found');
+    }
+
+    const previousProfileImage = existing.profileImage;
+
     const pet = await this.petModel.findOneAndUpdate(
       {
         _id: petId,
@@ -84,7 +101,48 @@ export class PetsService {
       throw new NotFoundException('Pet not found');
     }
 
+    // The new photo is already linked at this point — only now is it safe to
+    // remove the old file. A failed cleanup shouldn't fail an otherwise
+    // successful upload; it just leaves an orphaned object behind.
+    await this.deleteOldPhoto(previousProfileImage);
+
     return pet;
+  }
+
+  async removePhoto(ownerId: string, petId: string) {
+    const existing = await this.petModel
+      .findOne({ _id: petId, owner: new Types.ObjectId(ownerId) })
+      .select('profileImage');
+
+    if (!existing) {
+      throw new NotFoundException('Pet not found');
+    }
+
+    const previousProfileImage = existing.profileImage;
+
+    await this.petModel.updateOne(
+      { _id: petId, owner: new Types.ObjectId(ownerId) },
+      { profileImage: '' },
+    );
+
+    await this.deleteOldPhoto(previousProfileImage);
+
+    return { message: 'Photo removed successfully' };
+  }
+
+  private async deleteOldPhoto(url?: string | null) {
+    if (!url) {
+      return;
+    }
+
+    try {
+      await this.storageProvider.deleteByUrl(url);
+    } catch (error) {
+      this.logger.error(
+        `Failed to delete previous pet photo: ${url}`,
+        error instanceof Error ? error.stack : undefined,
+      );
+    }
   }
 
   async remove(ownerId: string, petId: string) {

@@ -2,6 +2,7 @@ import { IsIn, IsInt, IsOptional, IsString, Min } from 'class-validator';
 
 import { Type } from 'class-transformer';
 import { ApiPropertyOptional } from '@nestjs/swagger';
+import { ParseOptionalBoolean } from '../../../common/decorators/parse-optional-boolean.decorator';
 
 export class AdminPetQueryDto {
   @ApiPropertyOptional({ default: 1, minimum: 1 })
@@ -24,8 +25,7 @@ export class AdminPetQueryDto {
   search?: string;
 
   @ApiPropertyOptional()
-  @IsOptional()
-  @Type(() => Boolean)
+  @ParseOptionalBoolean()
   isLost?: boolean;
 
   @ApiPropertyOptional({ example: 'Cat' })
