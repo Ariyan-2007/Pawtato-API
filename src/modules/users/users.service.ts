@@ -44,12 +44,67 @@ export class UsersService {
       fullName: user.fullName,
       email: user.email,
       role: user.role,
+      isEmailVerified: user.isEmailVerified,
       createdAt: user.get('createdAt') as Date,
     };
   }
 
   async findByEmail(email: string) {
     return this.userModel.findOne({ email }).select('+password');
+  }
+
+  async findByEmailWithVerificationCode(email: string) {
+    return this.userModel
+      .findOne({ email })
+      .select('+emailVerificationCodeHash');
+  }
+
+  async setEmailVerificationCode(
+    userId: string,
+    codeHash: string,
+    expiresAt: Date,
+  ) {
+    return this.userModel.findByIdAndUpdate(userId, {
+      emailVerificationCodeHash: codeHash,
+      emailVerificationExpiresAt: expiresAt,
+    });
+  }
+
+  async markEmailVerified(userId: string) {
+    return this.userModel
+      .findByIdAndUpdate(
+        userId,
+        {
+          isEmailVerified: true,
+          emailVerificationCodeHash: null,
+          emailVerificationExpiresAt: null,
+        },
+        { new: true },
+      )
+      .select('-password');
+  }
+
+  async findByEmailWithResetCode(email: string) {
+    return this.userModel.findOne({ email }).select('+passwordResetCodeHash');
+  }
+
+  async setPasswordResetCode(
+    userId: string,
+    codeHash: string,
+    expiresAt: Date,
+  ) {
+    return this.userModel.findByIdAndUpdate(userId, {
+      passwordResetCodeHash: codeHash,
+      passwordResetExpiresAt: expiresAt,
+    });
+  }
+
+  async resetPassword(userId: string, hashedPassword: string) {
+    return this.userModel.findByIdAndUpdate(userId, {
+      password: hashedPassword,
+      passwordResetCodeHash: null,
+      passwordResetExpiresAt: null,
+    });
   }
 
   async getProfile(userId: string) {
