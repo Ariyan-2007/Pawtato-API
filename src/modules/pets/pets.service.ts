@@ -12,6 +12,7 @@ import { DOMAIN_EVENTS } from '../../common/events/domain-events';
 import { STORAGE_PROVIDER } from '../storage/storage.constants';
 import type { StorageProvider } from '../storage/interfaces/storage-provider.interface';
 import { ActivityService } from '../activity/activity.service';
+import { escapeRegExp } from '../../common/utils/regex.util';
 
 @Injectable()
 export class PetsService {
@@ -156,6 +157,8 @@ export class PetsService {
     if (!pet) {
       throw new NotFoundException('Pet not found');
     }
+
+    await this.deleteOldPhoto(pet.profileImage);
 
     return {
       message: 'Pet deleted successfully',
@@ -384,11 +387,62 @@ export class PetsService {
   }
 
   async deletePet(id: string) {
-    await this.petModel.findByIdAndDelete(id);
+    const pet = await this.petModel.findByIdAndDelete(id);
+
+    if (!pet) {
+      throw new NotFoundException('Pet not found');
+    }
+
+    await this.deleteOldPhoto(pet.profileImage);
 
     return {
       message: 'Pet deleted successfully',
     };
+  }
+
+  // Read-only id lookup used by AdminService to compute the full set of
+  // pets affected by a user-deletion cascade *before* deleting anything —
+  // see AdminService.cascadeDeleteUserData. Kept separate from
+  // deleteAllForOwner so a crash mid-cascade can always re-derive the same
+  // ids on retry, rather than losing track of what's left to clean up
+  // because the pets that would answer "whose data is this" are already gone.
+  async findIdsForOwner(ownerId: string): Promise<string[]> {
+    const ids = await this.petModel.distinct('_id', {
+      owner: new Types.ObjectId(ownerId),
+    });
+
+    return ids.map((id) => id.toString());
+  }
+
+  // Cascade delete — every pet the user owns, plus each one's stored photo.
+  // Callers are responsible for cleaning up anything that references these
+  // pets first (medical records, vaccinations, scan history, found reports,
+  // tags, dating profiles/matches) — see AdminService.cascadeDeleteUserData.
+  async deleteAllForOwner(ownerId: string) {
+    const objectId = new Types.ObjectId(ownerId);
+
+    const pets = await this.petModel
+      .find({ owner: objectId })
+      .select('profileImage');
+
+    for (const pet of pets) {
+      await this.deleteOldPhoto(pet.profileImage);
+    }
+
+    await this.petModel.deleteMany({ owner: objectId });
+
+    return { deletedCount: pets.length };
+  }
+
+  // Used by DatingService.discover() to keep species-matching at the DB
+  // query level (so pagination stays correct) rather than filtering an
+  // already-paginated page in application code.
+  async findIdsBySpecies(species: string): Promise<string[]> {
+    const ids = await this.petModel.distinct('_id', {
+      species: { $regex: `^${escapeRegExp(species.trim())}$`, $options: 'i' },
+    });
+
+    return ids.map((id) => id.toString());
   }
 
   async topScannedPets() {

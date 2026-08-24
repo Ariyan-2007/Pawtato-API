@@ -1,3 +1,4 @@
+import { NotFoundException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getModelToken } from '@nestjs/mongoose';
 import * as bcrypt from 'bcrypt';
@@ -20,6 +21,7 @@ describe('UsersService', () => {
     findOne: jest.Mock;
     findById: jest.Mock;
     findByIdAndUpdate: jest.Mock;
+    findByIdAndDelete: jest.Mock;
     find: jest.Mock;
     countDocuments: jest.Mock;
   };
@@ -31,10 +33,11 @@ describe('UsersService', () => {
       findOne: jest.fn(),
       findById: jest.fn(),
       findByIdAndUpdate: jest.fn(),
+      findByIdAndDelete: jest.fn(),
       find: jest.fn(),
       countDocuments: jest.fn(),
     };
-    storageProvider = { deleteByUrl: jest.fn() };
+    storageProvider = { deleteByUrl: jest.fn().mockResolvedValue(undefined) };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -259,6 +262,42 @@ describe('UsersService', () => {
           ],
         }),
       );
+    });
+  });
+
+  describe('deleteUser', () => {
+    it('throws NotFoundException for an unknown user and never touches storage', async () => {
+      userModel.findByIdAndDelete.mockResolvedValue(null);
+
+      await expect(service.deleteUser('missing')).rejects.toThrow(
+        NotFoundException,
+      );
+      expect(storageProvider.deleteByUrl).not.toHaveBeenCalled();
+    });
+
+    it('deletes the user and cleans up their avatar file', async () => {
+      userModel.findByIdAndDelete.mockResolvedValue({
+        _id: 'user-1',
+        avatar: '/uploads/avatars/one.png',
+      });
+
+      const result = await service.deleteUser('user-1');
+
+      expect(storageProvider.deleteByUrl).toHaveBeenCalledWith(
+        '/uploads/avatars/one.png',
+      );
+      expect(result).toEqual({ message: 'User deleted successfully' });
+    });
+
+    it('skips avatar cleanup when the user never had one', async () => {
+      userModel.findByIdAndDelete.mockResolvedValue({
+        _id: 'user-1',
+        avatar: '',
+      });
+
+      await service.deleteUser('user-1');
+
+      expect(storageProvider.deleteByUrl).not.toHaveBeenCalled();
     });
   });
 });

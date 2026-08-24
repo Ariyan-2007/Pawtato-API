@@ -165,6 +165,19 @@ describe('NotificationsService', () => {
     });
   });
 
+  describe('deleteAllForUser', () => {
+    it('deletes every notification belonging to the user, regardless of pet', async () => {
+      notificationModel.deleteMany.mockResolvedValue({ deletedCount: 4 });
+
+      const result = await service.deleteAllForUser(userId);
+
+      expect(notificationModel.deleteMany).toHaveBeenCalledWith({
+        user: new Types.ObjectId(userId),
+      });
+      expect(result).toEqual({ deletedCount: 4 });
+    });
+  });
+
   describe('resolveMissingContext', () => {
     it("downgrades only this user's CRITICAL notifications for the given pet", async () => {
       const petId = new Types.ObjectId().toString();

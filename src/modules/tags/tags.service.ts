@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
@@ -38,6 +39,8 @@ function extractOwnerId(owner: unknown): string {
 
 @Injectable()
 export class TagsService {
+  private readonly logger = new Logger(TagsService.name);
+
   constructor(
     @InjectModel(Tag.name)
     private readonly tagModel: Model<TagDocument>,
@@ -413,5 +416,68 @@ export class TagsService {
     });
 
     return tag;
+  }
+
+  // Read-only id lookups used by AdminService to compute the full set of
+  // tags/pets affected by a cascade *before* deleting anything — see
+  // AdminService.cascadeDeleteUserData/deletePet. Kept separate from the
+  // delete methods below so a crash mid-cascade can always re-derive the
+  // same ids on retry, rather than silently losing track of what's left to
+  // clean up because the tags/pets that would answer "whose data is this"
+  // are already gone.
+  async findIdsForOwner(ownerId: string): Promise<string[]> {
+    const ids = await this.tagModel.distinct('_id', {
+      ownerId: new Types.ObjectId(ownerId),
+    });
+
+    return ids.map((id) => id.toString());
+  }
+
+  async findIdsForPet(petId: string): Promise<string[]> {
+    const ids = await this.tagModel.distinct('_id', {
+      assignedPetId: new Types.ObjectId(petId),
+    });
+
+    return ids.map((id) => id.toString());
+  }
+
+  // Cascade delete — permanently removes every tag matching `filter`, along
+  // with each one's QR image. Unlike delete()/unassign(), this never emits a
+  // domain event: those exist to notify a tag's owner that something
+  // changed, and this only ever runs as part of deleting that same owner (or
+  // one of their pets), so there's no one left for a notification to reach.
+  private async deleteTagsMatching(filter: Record<string, unknown>) {
+    const tags = await this.tagModel.find(filter);
+
+    for (const tag of tags) {
+      try {
+        await this.qrService.delete(tag.publicCode);
+      } catch (error) {
+        this.logger.error(
+          `Failed to delete QR image for tag ${tag._id.toString()}`,
+          error instanceof Error ? error.stack : undefined,
+        );
+      }
+    }
+
+    await this.tagModel.deleteMany(filter);
+
+    return { deletedCount: tags.length };
+  }
+
+  // Every tag the user owns, assigned or not — called when an admin deletes
+  // the user (see AdminService.cascadeDeleteUserData).
+  async deleteAllForOwner(ownerId: string) {
+    return this.deleteTagsMatching({ ownerId: new Types.ObjectId(ownerId) });
+  }
+
+  // Whichever tag is currently assigned to this one pet — called when an
+  // admin deletes a single pet (see AdminService.deletePet). Deliberately
+  // scoped to assignedPetId, not ownerId: deleting one pet must not touch
+  // the same owner's other, unrelated tags.
+  async deleteAllForPet(petId: string) {
+    return this.deleteTagsMatching({
+      assignedPetId: new Types.ObjectId(petId),
+    });
   }
 }

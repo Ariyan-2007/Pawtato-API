@@ -98,6 +98,10 @@ async function bootstrap() {
       'Audit log of admin actions and sensitive self-service actions (tag lifecycle, lost/found status)',
     )
     .addTag('Health', 'Liveness check')
+    .addTag(
+      'Dating',
+      'Pet dating profiles, swipe-to-match discovery, matches, lightweight in-app chat, and abuse reporting',
+    )
     .build();
 
   const document = SwaggerModule.createDocument(app, swaggerConfig);

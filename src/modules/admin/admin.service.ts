@@ -1,25 +1,35 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { UsersService } from '../users/users.service';
 import { PetsService } from '../pets/pets.service';
+import { TagsService } from '../tags/tags.service';
+import { ScansService } from '../scans/scans.service';
 import { VaccinationsService } from '../vaccinations/vaccinations.service';
 import { MedicalService } from '../medical/medical.service';
 import { FoundReportsService } from '../found-reports/found-reports.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { ActivityService } from '../activity/activity.service';
+import { DatingService } from '../dating/dating.service';
 import { DashboardStatsDto } from './dto/dashboard-stats.dto';
 import { AdminUserQueryDto } from './dto/admin-user-query.dto';
 import { UserRole } from '../../common/enums/user-role.enum';
 import { AdminPetQueryDto } from './dto/admin-pet-query.dto';
 import { AdminFoundReportQueryDto } from './dto/admin-found-report-query.dto';
 import { FoundReportStatus } from '../../common/enums/found-report-status.enum';
+import type { AdminDatingReportQueryDto } from './dto/admin-dating-report-query.dto';
+import { DatingReportStatus } from '../../common/enums/dating-report-status.enum';
 
 @Injectable()
 export class AdminService {
   constructor(
     private readonly usersService: UsersService,
     private readonly petsService: PetsService,
+    private readonly tagsService: TagsService,
+    private readonly scansService: ScansService,
     private readonly vaccinationsService: VaccinationsService,
     private readonly medicalService: MedicalService,
     private readonly foundReportsService: FoundReportsService,
+    private readonly notificationsService: NotificationsService,
+    private readonly datingService: DatingService,
     private readonly activityService: ActivityService,
   ) {}
 
@@ -73,10 +83,60 @@ export class AdminService {
     return result;
   }
 
+  // Deletes a user and everything connected to them: every pet they own,
+  // every tag they own (assigned to one of those pets or not), and
+  // everything that in turn references those pets/tags (medical records,
+  // vaccinations, scan history, found reports, in-app notifications, dating
+  // profiles/swipes/matches/messages), plus every dating report this user
+  // filed against someone else's pet, plus every stored file along the way
+  // (avatar, pet photos, tag QR images, found-report photos). Deliberately
+  // not wrapped in a Mongo transaction —
+  // this project's MongoDB isn't running as a replica set (see
+  // PAWTATO_ROADMAP.md's Phase 8 notes), which transactions require.
+  //
+  // Runs children-first (scans/found-reports/medical/vaccinations, then
+  // tags/pets, then notifications, then the user) specifically so a crash
+  // partway through leaves the least damage: if it dies before reaching the
+  // tags/pets step, every id needed to retry is still derivable by querying
+  // Pet.owner/Tag.ownerId again, since those documents are still there.
+  //
+  // What this intentionally does NOT delete: Activity audit-log entries
+  // where this user is the actor (or target) — the audit trail is meant to
+  // outlive the account it describes, the same way it isn't purged when a
+  // pet or tag is deleted either — and FoundReport.reviewedBy stamps left by
+  // this user reviewing *other* people's reports, which are a historical
+  // record of moderation, not this user's own data.
   async delete(actorId: string, id: string) {
+    const user = await this.usersService.findById(id);
+
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    const [petIds, tagIds] = await Promise.all([
+      this.petsService.findIdsForOwner(id),
+      this.tagsService.findIdsForOwner(id),
+    ]);
+
+    await this.scansService.deleteAllForPetsAndTags(petIds, tagIds);
+    await this.foundReportsService.deleteAllForPetsAndTags(petIds, tagIds);
+    await this.medicalService.deleteAllForPets(petIds);
+    await this.vaccinationsService.deleteAllForPets(petIds);
+
+    await this.datingService.deleteAllForPets(petIds);
+    await this.datingService.deleteReportsByReporter(id);
+
+    await this.tagsService.deleteAllForOwner(id);
+    await this.petsService.deleteAllForOwner(id);
+
+    await this.notificationsService.deleteAllForUser(id);
+
     const result = await this.usersService.deleteUser(id);
 
-    await this.activityService.log(actorId, 'admin.user.deleted', id);
+    await this.activityService.log(actorId, 'admin.user.deleted', id, {
+      deletedPetCount: petIds.length,
+      deletedTagCount: tagIds.length,
+    });
 
     return result;
   }
@@ -97,10 +157,26 @@ export class AdminService {
     return result;
   }
 
+  // Deletes a single pet and everything connected to it (its assigned tag +
+  // QR image, medical records, vaccinations, scan history, found reports,
+  // dating profile/swipes/matches/messages/reports-against-it), without
+  // touching the owner's other pets/tags. See delete() above for the
+  // equivalent whole-user cascade.
   async deletePet(actorId: string, id: string) {
+    const tagIds = await this.tagsService.findIdsForPet(id);
+
+    await this.scansService.deleteAllForPetsAndTags([id], tagIds);
+    await this.foundReportsService.deleteAllForPetsAndTags([id], tagIds);
+    await this.medicalService.deleteAllForPets([id]);
+    await this.vaccinationsService.deleteAllForPets([id]);
+    await this.datingService.deleteAllForPets([id]);
+    await this.tagsService.deleteAllForPet(id);
+
     const result = await this.petsService.deletePet(id);
 
-    await this.activityService.log(actorId, 'admin.pet.deleted', id);
+    await this.activityService.log(actorId, 'admin.pet.deleted', id, {
+      deletedTagCount: tagIds.length,
+    });
 
     return result;
   }
@@ -133,5 +209,21 @@ export class AdminService {
     status: FoundReportStatus,
   ) {
     return this.foundReportsService.updateStatus(id, actorId, status);
+  }
+
+  async datingReports(query: AdminDatingReportQueryDto) {
+    return this.datingService.adminListReports(query);
+  }
+
+  async updateDatingReportStatus(
+    actorId: string,
+    id: string,
+    status: DatingReportStatus,
+  ) {
+    return this.datingService.adminUpdateReportStatus(actorId, id, status);
+  }
+
+  async deactivateDatingProfile(actorId: string, petId: string) {
+    return this.datingService.adminDeactivateProfile(actorId, petId);
   }
 }

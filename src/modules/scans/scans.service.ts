@@ -76,4 +76,22 @@ export class ScansService {
 
     return this.scanEventModel.find({ pet: petId }).sort({ createdAt: -1 });
   }
+
+  // Cascade delete — every scan event tied to any of these pets or tags.
+  // Called from AdminService when a pet, a tag's owning pet, or a whole user
+  // (pets + tags together) is deleted.
+  async deleteAllForPetsAndTags(petIds: string[], tagIds: string[]) {
+    if (petIds.length === 0 && tagIds.length === 0) {
+      return { deletedCount: 0 };
+    }
+
+    const result = await this.scanEventModel.deleteMany({
+      $or: [
+        { pet: { $in: petIds.map((id) => new Types.ObjectId(id)) } },
+        { tag: { $in: tagIds.map((id) => new Types.ObjectId(id)) } },
+      ],
+    });
+
+    return { deletedCount: result.deletedCount };
+  }
 }

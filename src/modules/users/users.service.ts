@@ -1,4 +1,4 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 
 import { InjectModel } from '@nestjs/mongoose';
 
@@ -306,8 +306,18 @@ export class UsersService {
     );
   }
 
+  // Callers are responsible for cascading everything that references this
+  // user first (pets, tags, and everything that in turn references those —
+  // see AdminService.cascadeDeleteUserData) — this only deletes the User
+  // document itself and its avatar file.
   async deleteUser(id: string) {
-    await this.userModel.findByIdAndDelete(id);
+    const user = await this.userModel.findByIdAndDelete(id);
+
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    await this.deleteOldAvatar(user.avatar);
 
     return {
       message: 'User deleted successfully',

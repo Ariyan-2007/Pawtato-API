@@ -11,6 +11,7 @@ export class MedicalRecord {
     type: Types.ObjectId,
     ref: 'Pet',
     required: true,
+    index: true,
   })
   pet!: Types.ObjectId;
 

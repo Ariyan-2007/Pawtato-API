@@ -13,6 +13,7 @@ import { FoundReport } from './schemas/found-report.schema';
 import { TagsService } from '../tags/tags.service';
 import { PetsService } from '../pets/pets.service';
 import { ActivityService } from '../activity/activity.service';
+import { STORAGE_PROVIDER } from '../storage/storage.constants';
 import { TagStatus } from '../../common/enums/tag-status.enum';
 import { FoundReportStatus } from '../../common/enums/found-report-status.enum';
 
@@ -24,10 +25,12 @@ describe('FoundReportsService', () => {
     countDocuments: jest.Mock;
     find: jest.Mock;
     findByIdAndUpdate: jest.Mock;
+    deleteMany: jest.Mock;
   };
   let tagsService: { findByPublicCode: jest.Mock; findOwnedById: jest.Mock };
   let petsService: { findOwnedPet: jest.Mock; findWithOwner: jest.Mock };
   let activityService: { log: jest.Mock };
+  let storageProvider: { deleteByUrl: jest.Mock };
 
   const tagId = new Types.ObjectId();
   const petId = new Types.ObjectId();
@@ -44,6 +47,7 @@ describe('FoundReportsService', () => {
       countDocuments: jest.fn().mockResolvedValue(0),
       find: jest.fn(),
       findByIdAndUpdate: jest.fn(),
+      deleteMany: jest.fn().mockResolvedValue({ deletedCount: 0 }),
     };
     tagsService = {
       findByPublicCode: jest.fn().mockResolvedValue({
@@ -58,6 +62,7 @@ describe('FoundReportsService', () => {
       findWithOwner: jest.fn().mockResolvedValue(null),
     };
     activityService = { log: jest.fn().mockResolvedValue(undefined) };
+    storageProvider = { deleteByUrl: jest.fn().mockResolvedValue(undefined) };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -70,6 +75,7 @@ describe('FoundReportsService', () => {
         { provide: PetsService, useValue: petsService },
         { provide: EventEmitter2, useValue: {} },
         { provide: ActivityService, useValue: activityService },
+        { provide: STORAGE_PROVIDER, useValue: storageProvider },
       ],
     }).compile();
 
@@ -209,6 +215,56 @@ describe('FoundReportsService', () => {
       await expect(
         service.updateStatus('missing', actorId, FoundReportStatus.REVIEWED),
       ).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('deleteAllForPetsAndTags', () => {
+    it('skips the query entirely when both id lists are empty', async () => {
+      const result = await service.deleteAllForPetsAndTags([], []);
+
+      expect(foundReportModel.find).not.toHaveBeenCalled();
+      expect(foundReportModel.deleteMany).not.toHaveBeenCalled();
+      expect(result).toEqual({ deletedCount: 0 });
+    });
+
+    it("deletes each matched report's photo before deleting the documents", async () => {
+      const select = jest
+        .fn()
+        .mockResolvedValue([
+          { photoUrl: '/uploads/found-reports/one.png' },
+          { photoUrl: '' },
+        ]);
+      foundReportModel.find.mockReturnValue({ select });
+      foundReportModel.deleteMany.mockResolvedValue({ deletedCount: 2 });
+
+      const result = await service.deleteAllForPetsAndTags(
+        [petId.toString()],
+        [tagId.toString()],
+      );
+
+      expect(storageProvider.deleteByUrl).toHaveBeenCalledTimes(1);
+      expect(storageProvider.deleteByUrl).toHaveBeenCalledWith(
+        '/uploads/found-reports/one.png',
+      );
+      expect(foundReportModel.deleteMany).toHaveBeenCalled();
+      expect(result).toEqual({ deletedCount: 2 });
+    });
+
+    it('still deletes the documents even when a photo cleanup fails', async () => {
+      const select = jest
+        .fn()
+        .mockResolvedValue([{ photoUrl: '/uploads/found-reports/one.png' }]);
+      foundReportModel.find.mockReturnValue({ select });
+      foundReportModel.deleteMany.mockResolvedValue({ deletedCount: 1 });
+      storageProvider.deleteByUrl.mockRejectedValue(new Error('boom'));
+
+      const result = await service.deleteAllForPetsAndTags(
+        [petId.toString()],
+        [],
+      );
+
+      expect(foundReportModel.deleteMany).toHaveBeenCalled();
+      expect(result).toEqual({ deletedCount: 1 });
     });
   });
 });

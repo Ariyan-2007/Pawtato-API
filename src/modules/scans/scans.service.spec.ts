@@ -10,7 +10,11 @@ import { DOMAIN_EVENTS } from '../../common/events/domain-events';
 
 describe('ScansService', () => {
   let service: ScansService;
-  let scanEventModel: { create: jest.Mock; find: jest.Mock };
+  let scanEventModel: {
+    create: jest.Mock;
+    find: jest.Mock;
+    deleteMany: jest.Mock;
+  };
   let petsService: { findOwnedPet: jest.Mock; findWithOwner: jest.Mock };
   let eventEmitter: { emit: jest.Mock };
 
@@ -21,6 +25,7 @@ describe('ScansService', () => {
     scanEventModel = {
       create: jest.fn().mockResolvedValue({ _id: new Types.ObjectId() }),
       find: jest.fn(),
+      deleteMany: jest.fn().mockResolvedValue({ deletedCount: 0 }),
     };
     petsService = { findOwnedPet: jest.fn(), findWithOwner: jest.fn() };
     eventEmitter = { emit: jest.fn() };
@@ -110,6 +115,29 @@ describe('ScansService', () => {
         service.findForOwnedPet('someone-else', petId.toString()),
       ).rejects.toThrow(notOwned);
       expect(scanEventModel.find).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('deleteAllForPetsAndTags', () => {
+    it('deletes every scan event matching either the given pets or tags', async () => {
+      scanEventModel.deleteMany.mockResolvedValue({ deletedCount: 5 });
+
+      const result = await service.deleteAllForPetsAndTags(
+        [petId.toString()],
+        [tagId.toString()],
+      );
+
+      expect(scanEventModel.deleteMany).toHaveBeenCalledWith({
+        $or: [{ pet: { $in: [petId] } }, { tag: { $in: [tagId] } }],
+      });
+      expect(result).toEqual({ deletedCount: 5 });
+    });
+
+    it('skips the query entirely when both id lists are empty', async () => {
+      const result = await service.deleteAllForPetsAndTags([], []);
+
+      expect(scanEventModel.deleteMany).not.toHaveBeenCalled();
+      expect(result).toEqual({ deletedCount: 0 });
     });
   });
 });

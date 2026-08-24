@@ -15,7 +15,11 @@ describe('PetsService', () => {
     findOneAndUpdate: jest.Mock;
     findOne: jest.Mock;
     findOneAndDelete: jest.Mock;
+    findByIdAndDelete: jest.Mock;
+    find: jest.Mock;
     create: jest.Mock;
+    distinct: jest.Mock;
+    deleteMany: jest.Mock;
   };
   let storageProvider: { deleteByUrl: jest.Mock };
   let eventEmitter: { emit: jest.Mock };
@@ -30,10 +34,14 @@ describe('PetsService', () => {
       findOneAndUpdate: jest.fn(),
       findOne: jest.fn(),
       findOneAndDelete: jest.fn(),
+      findByIdAndDelete: jest.fn(),
+      find: jest.fn(),
       create: jest.fn(),
+      distinct: jest.fn(),
+      deleteMany: jest.fn().mockResolvedValue({ deletedCount: 0 }),
     };
     storageProvider = {
-      deleteByUrl: jest.fn(),
+      deleteByUrl: jest.fn().mockResolvedValue(undefined),
     };
     eventEmitter = { emit: jest.fn() };
     activityService = { log: jest.fn().mockResolvedValue(undefined) };
@@ -243,6 +251,92 @@ describe('PetsService', () => {
       await expect(
         service.updatePhoto(ownerId, petId, '/uploads/pets/photo.png'),
       ).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('remove / deletePet (file cleanup)', () => {
+    it('remove deletes the stored photo after deleting the pet', async () => {
+      petModel.findOneAndDelete.mockResolvedValue({
+        _id: petId,
+        profileImage: '/uploads/pets/photo.png',
+      });
+
+      const result = await service.remove(ownerId, petId);
+
+      expect(storageProvider.deleteByUrl).toHaveBeenCalledWith(
+        '/uploads/pets/photo.png',
+      );
+      expect(result).toEqual({ message: 'Pet deleted successfully' });
+    });
+
+    it('deletePet (admin) throws NotFoundException for an unknown pet', async () => {
+      petModel.findByIdAndDelete.mockResolvedValue(null);
+
+      await expect(service.deletePet(petId)).rejects.toThrow(NotFoundException);
+      expect(storageProvider.deleteByUrl).not.toHaveBeenCalled();
+    });
+
+    it('deletePet (admin) deletes the stored photo after deleting the pet', async () => {
+      petModel.findByIdAndDelete.mockResolvedValue({
+        _id: petId,
+        profileImage: '/uploads/pets/photo.png',
+      });
+
+      await service.deletePet(petId);
+
+      expect(storageProvider.deleteByUrl).toHaveBeenCalledWith(
+        '/uploads/pets/photo.png',
+      );
+    });
+  });
+
+  describe('cascade delete helpers (admin user-deletion)', () => {
+    it('findIdsForOwner returns owned pet ids as strings', async () => {
+      const id = new Types.ObjectId();
+      petModel.distinct.mockResolvedValue([id]);
+
+      const result = await service.findIdsForOwner(ownerId);
+
+      expect(petModel.distinct).toHaveBeenCalledWith('_id', {
+        owner: new Types.ObjectId(ownerId),
+      });
+      expect(result).toEqual([id.toString()]);
+    });
+
+    it('deleteAllForOwner deletes every photo before deleting the pet documents', async () => {
+      const select = jest
+        .fn()
+        .mockResolvedValue([
+          { profileImage: '/uploads/pets/one.png' },
+          { profileImage: '' },
+        ]);
+      petModel.find.mockReturnValue({ select });
+
+      const result = await service.deleteAllForOwner(ownerId);
+
+      expect(petModel.find).toHaveBeenCalledWith({
+        owner: new Types.ObjectId(ownerId),
+      });
+      expect(storageProvider.deleteByUrl).toHaveBeenCalledTimes(1);
+      expect(storageProvider.deleteByUrl).toHaveBeenCalledWith(
+        '/uploads/pets/one.png',
+      );
+      expect(petModel.deleteMany).toHaveBeenCalledWith({
+        owner: new Types.ObjectId(ownerId),
+      });
+      expect(result).toEqual({ deletedCount: 2 });
+    });
+
+    it('findIdsBySpecies matches species case-insensitively and escapes regex-special characters', async () => {
+      const id = new Types.ObjectId();
+      petModel.distinct.mockResolvedValue([id]);
+
+      const result = await service.findIdsBySpecies('C.a*t');
+
+      expect(petModel.distinct).toHaveBeenCalledWith('_id', {
+        species: { $regex: '^C\\.a\\*t$', $options: 'i' },
+      });
+      expect(result).toEqual([id.toString()]);
     });
   });
 });

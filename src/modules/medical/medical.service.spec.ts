@@ -8,14 +8,22 @@ import { PetsService } from '../pets/pets.service';
 
 describe('MedicalService', () => {
   let service: MedicalService;
-  let medicalModel: { create: jest.Mock; find: jest.Mock };
+  let medicalModel: {
+    create: jest.Mock;
+    find: jest.Mock;
+    deleteMany: jest.Mock;
+  };
   let petsService: { findOwnedPet: jest.Mock };
 
   const ownerId = new Types.ObjectId().toString();
   const petId = new Types.ObjectId().toString();
 
   beforeEach(async () => {
-    medicalModel = { create: jest.fn(), find: jest.fn() };
+    medicalModel = {
+      create: jest.fn(),
+      find: jest.fn(),
+      deleteMany: jest.fn().mockResolvedValue({ deletedCount: 0 }),
+    };
     petsService = { findOwnedPet: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -79,6 +87,29 @@ describe('MedicalService', () => {
         notOwned,
       );
       expect(medicalModel.find).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('deleteAllForPets', () => {
+    it('deletes every medical record for the given pets', async () => {
+      const otherPetId = new Types.ObjectId().toString();
+      medicalModel.deleteMany.mockResolvedValue({ deletedCount: 3 });
+
+      const result = await service.deleteAllForPets([petId, otherPetId]);
+
+      expect(medicalModel.deleteMany).toHaveBeenCalledWith({
+        pet: {
+          $in: [new Types.ObjectId(petId), new Types.ObjectId(otherPetId)],
+        },
+      });
+      expect(result).toEqual({ deletedCount: 3 });
+    });
+
+    it('skips the query entirely for an empty pet list', async () => {
+      const result = await service.deleteAllForPets([]);
+
+      expect(medicalModel.deleteMany).not.toHaveBeenCalled();
+      expect(result).toEqual({ deletedCount: 0 });
     });
   });
 });

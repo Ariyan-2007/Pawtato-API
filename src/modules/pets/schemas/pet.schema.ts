@@ -11,6 +11,7 @@ export class Pet {
     type: Types.ObjectId,
     ref: 'User',
     required: true,
+    index: true,
   })
   owner!: Types.ObjectId;
 
@@ -90,3 +91,7 @@ export class Pet {
 }
 
 export const PetSchema = SchemaFactory.createForClass(Pet);
+
+// Backs PublicService.getLostPets() (`{ isLost: true }` sorted by `lostDate` desc)
+// and the admin/statistics lost/recovered counters.
+PetSchema.index({ isLost: 1, lostDate: -1 });
