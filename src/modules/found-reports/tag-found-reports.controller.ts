@@ -9,6 +9,7 @@ import {
 } from '@nestjs/swagger';
 
 import { FoundReportsService } from './found-reports.service';
+import { ParseMongoIdPipe } from '../../common/pipes/parse-mongo-id.pipe';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { UserRole } from '../../common/enums/user-role.enum';
@@ -40,7 +41,10 @@ export class TagFoundReportsController {
   @ApiResponse({ status: 403, description: 'Caller does not own this tag.' })
   @ApiResponse({ status: 404, description: 'Tag not found.' })
   @Get()
-  findAll(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+  findAll(
+    @CurrentUser() user: JwtPayload,
+    @Param('id', ParseMongoIdPipe) id: string,
+  ) {
     return this.foundReportsService.findForOwnedTag(
       user.sub,
       id,

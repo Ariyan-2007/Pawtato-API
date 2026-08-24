@@ -1,4 +1,4 @@
-import { IsNotEmpty, IsUrl } from 'class-validator';
+import { IsNotEmpty, IsUrl, MaxLength } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 
 export class CreateTagDto {
@@ -12,5 +12,6 @@ export class CreateTagDto {
   })
   @IsUrl({ require_tld: false })
   @IsNotEmpty()
+  @MaxLength(500)
   redirectBaseUrl!: string;
 }

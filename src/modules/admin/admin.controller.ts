@@ -18,6 +18,7 @@ import {
 } from '@nestjs/swagger';
 
 import { AdminService } from './admin.service';
+import { ParseMongoIdPipe } from '../../common/pipes/parse-mongo-id.pipe';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
@@ -59,7 +60,7 @@ export class AdminController {
   @ApiResponse({ status: 404, description: 'User not found.' })
   @Get('users/:id')
   findUser(
-    @Param('id')
+    @Param('id', ParseMongoIdPipe)
     id: string,
   ) {
     return this.adminService.user(id);
@@ -70,7 +71,7 @@ export class AdminController {
   @ApiResponse({ status: 200, description: 'User blocked.' })
   @Patch('users/:id/block')
   blockUser(
-    @Param('id')
+    @Param('id', ParseMongoIdPipe)
     id: string,
   ) {
     return this.adminService.block(id);
@@ -81,7 +82,7 @@ export class AdminController {
   @ApiResponse({ status: 200, description: 'User unblocked.' })
   @Patch('users/:id/unblock')
   unblockUser(
-    @Param('id')
+    @Param('id', ParseMongoIdPipe)
     id: string,
   ) {
     return this.adminService.unblock(id);
@@ -92,7 +93,7 @@ export class AdminController {
   @ApiResponse({ status: 200, description: 'Role updated.' })
   @Patch('users/:id/role')
   changeRole(
-    @Param('id')
+    @Param('id', ParseMongoIdPipe)
     id: string,
 
     @Body()
@@ -106,7 +107,7 @@ export class AdminController {
   @ApiResponse({ status: 200, description: 'User deleted.' })
   @Delete('users/:id')
   deleteUser(
-    @Param('id')
+    @Param('id', ParseMongoIdPipe)
     id: string,
   ) {
     return this.adminService.delete(id);
@@ -128,7 +129,7 @@ export class AdminController {
   @ApiResponse({ status: 404, description: 'Pet not found.' })
   @Get('pets/:id')
   findPet(
-    @Param('id')
+    @Param('id', ParseMongoIdPipe)
     id: string,
   ) {
     return this.adminService.pet(id);
@@ -139,7 +140,7 @@ export class AdminController {
   @ApiResponse({ status: 200, description: 'Pet marked as recovered.' })
   @Patch('pets/:id/recover')
   recoverPet(
-    @Param('id')
+    @Param('id', ParseMongoIdPipe)
     id: string,
   ) {
     return this.adminService.recoverPet(id);
@@ -150,7 +151,7 @@ export class AdminController {
   @ApiResponse({ status: 200, description: 'Pet deleted.' })
   @Delete('pets/:id')
   deletePet(
-    @Param('id')
+    @Param('id', ParseMongoIdPipe)
     id: string,
   ) {
     return this.adminService.deletePet(id);

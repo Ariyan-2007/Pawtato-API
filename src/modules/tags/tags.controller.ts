@@ -19,6 +19,7 @@ import {
 } from '@nestjs/swagger';
 
 import { TagsService } from './tags.service';
+import { ParseMongoIdPipe } from '../../common/pipes/parse-mongo-id.pipe';
 import { CreateTagDto } from './dto/create-tag.dto';
 import { AssignTagDto } from './dto/assign-tag.dto';
 import { UnassignTagDto } from './dto/unassign-tag.dto';
@@ -65,7 +66,7 @@ export class TagsController {
   @UseGuards(RolesGuard)
   @Roles(UserRole.ADMIN)
   @Get(':id')
-  findOne(@Param('id') id: string) {
+  findOne(@Param('id', ParseMongoIdPipe) id: string) {
     return this.tagsService.findOne(id);
   }
 
@@ -130,7 +131,10 @@ export class TagsController {
   @ApiResponse({ status: 403, description: 'Caller does not own this tag.' })
   @ApiResponse({ status: 404, description: 'Tag not found.' })
   @Delete(':id')
-  remove(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+  remove(
+    @CurrentUser() user: JwtPayload,
+    @Param('id', ParseMongoIdPipe) id: string,
+  ) {
     return this.tagsService.delete(
       user.sub,
       id,
@@ -146,7 +150,7 @@ export class TagsController {
   @UseGuards(RolesGuard)
   @Roles(UserRole.ADMIN)
   @Patch(':id/suspend')
-  suspend(@Param('id') id: string) {
+  suspend(@Param('id', ParseMongoIdPipe) id: string) {
     return this.tagsService.suspend(id);
   }
 
@@ -156,7 +160,7 @@ export class TagsController {
   @UseGuards(RolesGuard)
   @Roles(UserRole.ADMIN)
   @Patch(':id/retire')
-  retire(@Param('id') id: string) {
+  retire(@Param('id', ParseMongoIdPipe) id: string) {
     return this.tagsService.retire(id);
   }
 }

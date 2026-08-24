@@ -13,6 +13,7 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import type { JwtPayload } from '../auth/interfaces/jwt-payload.interface';
 
 import { VaccinationsService } from './vaccinations.service';
+import { ParseMongoIdPipe } from '../../common/pipes/parse-mongo-id.pipe';
 import { CreateVaccinationDto } from './dto/create-vaccination.dto';
 
 @ApiTags('Vaccinations')
@@ -33,7 +34,7 @@ export class VaccinationsController {
   create(
     @CurrentUser() user: JwtPayload,
 
-    @Param('petId')
+    @Param('petId', ParseMongoIdPipe)
     petId: string,
 
     @Body()
@@ -53,7 +54,7 @@ export class VaccinationsController {
   findAll(
     @CurrentUser() user: JwtPayload,
 
-    @Param('petId')
+    @Param('petId', ParseMongoIdPipe)
     petId: string,
   ) {
     return this.vaccinationsService.findAll(user.sub, petId);
