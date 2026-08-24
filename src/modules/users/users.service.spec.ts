@@ -10,6 +10,7 @@ import { UsersService } from './users.service';
 import { User } from './schemas/user.schema';
 import { Pet } from '../pets/schemas/pet.schema';
 import { AccountStatus } from '../../common/enums/account-status.enum';
+import { UserRole } from '../../common/enums/user-role.enum';
 import { STORAGE_PROVIDER } from '../storage/storage.constants';
 
 describe('UsersService', () => {
@@ -17,22 +18,30 @@ describe('UsersService', () => {
   let userModel: {
     create: jest.Mock;
     findOne: jest.Mock;
+    findById: jest.Mock;
     findByIdAndUpdate: jest.Mock;
+    find: jest.Mock;
+    countDocuments: jest.Mock;
   };
+  let storageProvider: { deleteByUrl: jest.Mock };
 
   beforeEach(async () => {
     userModel = {
       create: jest.fn(),
       findOne: jest.fn(),
+      findById: jest.fn(),
       findByIdAndUpdate: jest.fn(),
+      find: jest.fn(),
+      countDocuments: jest.fn(),
     };
+    storageProvider = { deleteByUrl: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         UsersService,
         { provide: getModelToken(User.name), useValue: userModel },
         { provide: getModelToken(Pet.name), useValue: {} },
-        { provide: STORAGE_PROVIDER, useValue: {} },
+        { provide: STORAGE_PROVIDER, useValue: storageProvider },
       ],
     }).compile();
 
@@ -148,6 +157,108 @@ describe('UsersService', () => {
         otpExpiresAt: null,
         otpAttempts: 0,
       });
+    });
+  });
+
+  describe('updateAvatar', () => {
+    it('replaces the avatar and cleans up the previous file', async () => {
+      userModel.findById.mockReturnValue({
+        select: jest.fn().mockResolvedValue({ avatar: '/uploads/old.png' }),
+      });
+      userModel.findByIdAndUpdate.mockResolvedValue({
+        avatar: '/uploads/new.png',
+      });
+
+      const result = await service.updateAvatar('user-1', '/uploads/new.png');
+
+      expect(userModel.findByIdAndUpdate).toHaveBeenCalledWith(
+        'user-1',
+        { avatar: '/uploads/new.png' },
+        { new: true },
+      );
+      expect(storageProvider.deleteByUrl).toHaveBeenCalledWith(
+        '/uploads/old.png',
+      );
+      expect(result).toEqual({ avatar: '/uploads/new.png' });
+    });
+
+    it('does not attempt cleanup when there was no previous avatar', async () => {
+      userModel.findById.mockReturnValue({
+        select: jest.fn().mockResolvedValue({ avatar: '' }),
+      });
+      userModel.findByIdAndUpdate.mockResolvedValue({});
+
+      await service.updateAvatar('user-1', '/uploads/new.png');
+
+      expect(storageProvider.deleteByUrl).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('admin moderation actions', () => {
+    it('blockUser sets isActive to false', async () => {
+      userModel.findByIdAndUpdate.mockResolvedValue({ isActive: false });
+
+      await service.blockUser('user-1');
+
+      expect(userModel.findByIdAndUpdate).toHaveBeenCalledWith(
+        'user-1',
+        { isActive: false },
+        { new: true },
+      );
+    });
+
+    it('unblockUser sets isActive to true', async () => {
+      userModel.findByIdAndUpdate.mockResolvedValue({ isActive: true });
+
+      await service.unblockUser('user-1');
+
+      expect(userModel.findByIdAndUpdate).toHaveBeenCalledWith(
+        'user-1',
+        { isActive: true },
+        { new: true },
+      );
+    });
+
+    it('changeRole updates the role field', async () => {
+      userModel.findByIdAndUpdate.mockResolvedValue({ role: UserRole.ADMIN });
+
+      await service.changeRole('user-1', UserRole.ADMIN);
+
+      expect(userModel.findByIdAndUpdate).toHaveBeenCalledWith(
+        'user-1',
+        { role: UserRole.ADMIN },
+        { new: true },
+      );
+    });
+  });
+
+  describe('findAll (admin listing)', () => {
+    it('builds a case-insensitive name/email search filter', async () => {
+      const chain = {
+        select: jest.fn().mockReturnThis(),
+        sort: jest.fn().mockReturnThis(),
+        skip: jest.fn().mockReturnThis(),
+        limit: jest.fn().mockResolvedValue([]),
+      };
+      userModel.find.mockReturnValue(chain);
+      userModel.countDocuments.mockResolvedValue(0);
+
+      await service.findAll({
+        page: 1,
+        limit: 20,
+        search: 'sarah',
+        sort: 'createdAt',
+        order: 'desc',
+      });
+
+      expect(userModel.find).toHaveBeenCalledWith(
+        expect.objectContaining({
+          $or: [
+            { fullName: { $regex: 'sarah', $options: 'i' } },
+            { email: { $regex: 'sarah', $options: 'i' } },
+          ],
+        }),
+      );
     });
   });
 });

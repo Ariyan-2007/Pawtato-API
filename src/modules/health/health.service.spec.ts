@@ -15,4 +15,14 @@ describe('HealthService', () => {
   it('should be defined', () => {
     expect(service).toBeDefined();
   });
+
+  describe('getHealth', () => {
+    it('reports success with a fresh timestamp', () => {
+      const result = service.getHealth();
+
+      expect(result.success).toBe(true);
+      expect(result.message).toBe('Pawtato API is running');
+      expect(new Date(result.timestamp).getTime()).not.toBeNaN();
+    });
+  });
 });

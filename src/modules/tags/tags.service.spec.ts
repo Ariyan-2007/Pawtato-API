@@ -1,4 +1,8 @@
-import { ForbiddenException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getModelToken } from '@nestjs/mongoose';
 import { EventEmitter2 } from '@nestjs/event-emitter';
@@ -188,6 +192,68 @@ describe('TagsService', () => {
 
       expect(tag.status).toBe(TagStatus.ASSIGNED);
     });
+
+    it('rejects assigning a tag that is not AVAILABLE (e.g. already assigned)', async () => {
+      tagModel.findOne.mockResolvedValue(
+        makeTag({
+          status: TagStatus.ASSIGNED,
+          assignedPetId: new Types.ObjectId(),
+        }),
+      );
+
+      await expect(
+        service.assign(ownerId, { publicCode: 'ABC123', petId: 'p1' }, false),
+      ).rejects.toThrow(BadRequestException);
+      expect(petsService.findOwnedPet).not.toHaveBeenCalled();
+    });
+
+    it('rejects assigning a suspended/retired tag', async () => {
+      tagModel.findOne.mockResolvedValue(
+        makeTag({ status: TagStatus.RETIRED }),
+      );
+
+      await expect(
+        service.assign(ownerId, { publicCode: 'ABC123', petId: 'p1' }, false),
+      ).rejects.toThrow('This tag is not available for assignment');
+    });
+
+    it('enforces at most one active tag per pet: rejects when the target pet already has an ASSIGNED tag', async () => {
+      const tag = makeTag();
+      const pet = { _id: new Types.ObjectId(), name: 'Fido' };
+      tagModel.findOne
+        .mockResolvedValueOnce(tag) // tag lookup
+        .mockResolvedValueOnce(makeTag({ status: TagStatus.ASSIGNED })); // an existing active tag on the pet
+      petsService.findOwnedPet.mockResolvedValue(pet);
+
+      await expect(
+        service.assign(ownerId, { publicCode: 'ABC123', petId: 'p1' }, false),
+      ).rejects.toThrow(
+        'This pet already has an active tag. Unassign it before assigning a new one.',
+      );
+      expect(tag.status).toBe(TagStatus.AVAILABLE);
+      expect(tag.save).not.toHaveBeenCalled();
+    });
+
+    it('assigns successfully, stamping assignedAt and emitting tag.assigned', async () => {
+      const tag = makeTag();
+      const pet = { _id: new Types.ObjectId(), name: 'Fido' };
+      tagModel.findOne.mockResolvedValueOnce(tag).mockResolvedValueOnce(null);
+      petsService.findOwnedPet.mockResolvedValue(pet);
+
+      const result = await service.assign(
+        ownerId,
+        { publicCode: 'ABC123', petId: 'p1' },
+        false,
+      );
+
+      expect(result.status).toBe(TagStatus.ASSIGNED);
+      expect(result.assignedPetId).toBe(pet._id);
+      expect(tag.save).toHaveBeenCalled();
+      expect(eventEmitter.emit).toHaveBeenCalledWith(
+        'tag.assigned',
+        expect.objectContaining({ petId: pet._id.toString() }),
+      );
+    });
   });
 
   describe('unassign', () => {
@@ -202,6 +268,44 @@ describe('TagsService', () => {
       await expect(
         service.unassign(otherOwnerId, { publicCode: 'ABC123' }, false),
       ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('rejects unassigning a tag that is not currently assigned', async () => {
+      tagModel.findOne.mockResolvedValue(
+        makeTag({ status: TagStatus.AVAILABLE }),
+      );
+
+      await expect(
+        service.unassign(ownerId, { publicCode: 'ABC123' }, false),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('frees the tag back to AVAILABLE and emits tag.unassigned', async () => {
+      const assignedPetId = new Types.ObjectId();
+      const tag = makeTag({
+        status: TagStatus.ASSIGNED,
+        assignedPetId,
+      });
+      tagModel.findOne.mockResolvedValue(tag);
+      petsService.findByIdAdmin.mockResolvedValue({
+        _id: assignedPetId,
+        name: 'Fido',
+        owner: ownerId,
+      });
+
+      const result = await service.unassign(
+        ownerId,
+        { publicCode: 'ABC123' },
+        false,
+      );
+
+      expect(result.status).toBe(TagStatus.AVAILABLE);
+      expect(result.assignedPetId).toBeNull();
+      expect(tag.save).toHaveBeenCalled();
+      expect(eventEmitter.emit).toHaveBeenCalledWith(
+        'tag.unassigned',
+        expect.objectContaining({ petId: assignedPetId.toString() }),
+      );
     });
   });
 
@@ -278,6 +382,41 @@ describe('TagsService', () => {
       await expect(
         service.findOwnedById(otherOwnerId, 'tag-id', true),
       ).resolves.toBe(tag);
+    });
+  });
+
+  describe('suspend/retire lifecycle', () => {
+    it('suspends an available/assigned tag', async () => {
+      const tag = makeTag();
+      tagModel.findById.mockResolvedValue(tag);
+
+      const result = await service.suspend('tag-id');
+
+      expect(result.status).toBe(TagStatus.SUSPENDED);
+      expect(tag.save).toHaveBeenCalled();
+    });
+
+    it('rejects suspending an already-retired tag', async () => {
+      tagModel.findById.mockResolvedValue(
+        makeTag({ status: TagStatus.RETIRED }),
+      );
+
+      await expect(service.suspend('tag-id')).rejects.toThrow(
+        BadRequestException,
+      );
+    });
+
+    it('retire clears any active assignment', async () => {
+      const tag = makeTag({
+        status: TagStatus.ASSIGNED,
+        assignedPetId: new Types.ObjectId(),
+      });
+      tagModel.findById.mockResolvedValue(tag);
+
+      const result = await service.retire('tag-id');
+
+      expect(result.status).toBe(TagStatus.RETIRED);
+      expect(result.assignedPetId).toBeNull();
     });
   });
 });

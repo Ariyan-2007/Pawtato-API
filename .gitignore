@@ -19,6 +19,12 @@ lerna-debug.log*
 /coverage
 /.nyc_output
 
+# Locally-generated uploads (avatars, pet photos, QR codes, found-report
+# photos) — e2e tests exercise the real LocalDiskStorageProvider against
+# this directory, same as a real local dev session would. Files already
+# tracked here from earlier manual testing are unaffected by this rule.
+/uploads/*
+
 # IDEs and editors
 /.idea
 .project
