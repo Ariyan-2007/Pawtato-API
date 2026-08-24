@@ -39,8 +39,11 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Unit tests
-        run: npm test -- --ci
+      - name: Unit tests with coverage
+        run: npm run test:cov -- --ci
+
+      - name: E2E tests
+        run: npm run test:e2e -- --ci
 
   docker-build:
     name: Docker image build

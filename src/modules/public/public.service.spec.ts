@@ -11,16 +11,25 @@ import { TagStatus } from '../../common/enums/tag-status.enum';
 
 describe('PublicService', () => {
   let service: PublicService;
-  let petModel: { findByIdAndUpdate: jest.Mock };
-  let tagModel: { findOne: jest.Mock };
+  let petModel: { findByIdAndUpdate: jest.Mock; find: jest.Mock };
+  let tagModel: { findOne: jest.Mock; find: jest.Mock };
   let scansService: { record: jest.Mock };
+  let foundReportsService: { create: jest.Mock };
 
   const petId = new Types.ObjectId();
 
   beforeEach(async () => {
-    petModel = { findByIdAndUpdate: jest.fn() };
-    tagModel = { findOne: jest.fn() };
+    petModel = { findByIdAndUpdate: jest.fn(), find: jest.fn() };
+    tagModel = { findOne: jest.fn(), find: jest.fn() };
     scansService = { record: jest.fn().mockResolvedValue(undefined) };
+    foundReportsService = {
+      create: jest.fn().mockResolvedValue({
+        _id: new Types.ObjectId(),
+        tag: new Types.ObjectId(),
+        pet: petId,
+        message: 'Found near the park',
+      }),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -28,7 +37,7 @@ describe('PublicService', () => {
         { provide: getModelToken(Pet.name), useValue: petModel },
         { provide: getModelToken(Tag.name), useValue: tagModel },
         { provide: ScansService, useValue: scansService },
-        { provide: FoundReportsService, useValue: {} },
+        { provide: FoundReportsService, useValue: foundReportsService },
       ],
     }).compile();
 
@@ -104,6 +113,144 @@ describe('PublicService', () => {
       const result = await service.getPetProfile('CODE1');
 
       expect(result).toEqual(expect.objectContaining({ petStatus: 'SAFE' }));
+    });
+
+    // The public scan response is hand-built field-by-field in the service
+    // rather than returned as a spread of the raw document — this test is a
+    // regression guard for that: if a future change ever swaps in a spread,
+    // it should fail here before it fails in production.
+    it('never exposes the pet document internals or owner identity', async () => {
+      tagModel.findOne.mockResolvedValue({
+        _id: new Types.ObjectId(),
+        publicCode: 'CODE1',
+        status: TagStatus.ASSIGNED,
+        assignedPetId: petId,
+      });
+      petModel.findByIdAndUpdate.mockResolvedValue({
+        _id: petId,
+        __v: 0,
+        name: 'Milo',
+        species: 'Cat',
+        isLost: false,
+        owner: new Types.ObjectId(),
+      });
+
+      const result = await service.getPetProfile('CODE1');
+
+      expect(result).not.toHaveProperty('_id');
+      expect(result).not.toHaveProperty('__v');
+      expect(result).not.toHaveProperty('owner');
+    });
+
+    it('records a scan and returns a RETIRED status message without leaking a pet profile', async () => {
+      const tagId = new Types.ObjectId();
+      tagModel.findOne.mockResolvedValue({
+        _id: tagId,
+        publicCode: 'CODE1',
+        status: TagStatus.RETIRED,
+        assignedPetId: petId,
+      });
+
+      const result = await service.getPetProfile('CODE1', 'Mozilla/5.0');
+
+      expect(result).toEqual({
+        tagStatus: TagStatus.RETIRED,
+        message: 'This tag has been retired and is no longer in use.',
+      });
+      expect(scansService.record).toHaveBeenCalledWith(
+        tagId,
+        null,
+        'CODE1',
+        'Mozilla/5.0',
+      );
+      expect(petModel.findByIdAndUpdate).not.toHaveBeenCalled();
+    });
+
+    it('records a scan and returns a SUSPENDED status message', async () => {
+      tagModel.findOne.mockResolvedValue({
+        _id: new Types.ObjectId(),
+        publicCode: 'CODE1',
+        status: TagStatus.SUSPENDED,
+        assignedPetId: petId,
+      });
+
+      const result = await service.getPetProfile('CODE1');
+
+      expect(result).toEqual({
+        tagStatus: TagStatus.SUSPENDED,
+        message: 'This tag has been suspended.',
+      });
+    });
+
+    it('returns "not linked" for a real, AVAILABLE tag that has never been assigned', async () => {
+      tagModel.findOne.mockResolvedValue({
+        _id: new Types.ObjectId(),
+        publicCode: 'CODE1',
+        status: TagStatus.AVAILABLE,
+        assignedPetId: null,
+      });
+
+      const result = await service.getPetProfile('CODE1');
+
+      expect(result).toEqual({
+        tagStatus: TagStatus.AVAILABLE,
+        message: 'This QR is not linked to a pet.',
+      });
+      expect(petModel.findByIdAndUpdate).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('getLostPets', () => {
+    it('maps each lost pet to its currently-assigned tag publicCode and never leaks an internal id', async () => {
+      const otherPetId = new Types.ObjectId();
+      petModel.find.mockReturnValue({
+        select: jest.fn().mockReturnValue({
+          sort: jest.fn().mockReturnValue({
+            lean: jest.fn().mockResolvedValue([
+              { _id: petId, name: 'Milo', species: 'Cat' },
+              { _id: otherPetId, name: 'Rex', species: 'Dog' },
+            ]),
+          }),
+        }),
+      });
+      tagModel.find.mockReturnValue({
+        select: jest.fn().mockReturnValue({
+          lean: jest
+            .fn()
+            .mockResolvedValue([{ assignedPetId: petId, publicCode: 'CODE1' }]),
+        }),
+      });
+
+      const result = await service.getLostPets();
+
+      expect(result).toEqual([
+        expect.objectContaining({ name: 'Milo', publicCode: 'CODE1' }),
+        expect.objectContaining({ name: 'Rex', publicCode: null }),
+      ]);
+      result.forEach((pet) => {
+        expect(pet).not.toHaveProperty('_id');
+      });
+    });
+  });
+
+  describe('submitFoundReport', () => {
+    it('returns only a sanitized confirmation, never the raw FoundReport document', async () => {
+      const result = await service.submitFoundReport('CODE1', {
+        message: 'Found near the park',
+        deviceFingerprint: 'abc123',
+      });
+
+      expect(foundReportsService.create).toHaveBeenCalledWith(
+        'CODE1',
+        expect.objectContaining({ message: 'Found near the park' }),
+        undefined,
+      );
+      expect(result).toEqual({
+        message: 'Thanks — the owner has been notified.',
+      });
+      expect(result).not.toHaveProperty('_id');
+      expect(result).not.toHaveProperty('tag');
+      expect(result).not.toHaveProperty('pet');
     });
   });
 });
