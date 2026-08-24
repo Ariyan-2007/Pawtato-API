@@ -8,6 +8,7 @@ import { FoundReport, FoundReportSchema } from './schemas/found-report.schema';
 
 import { TagsModule } from '../tags/tags.module';
 import { PetsModule } from '../pets/pets.module';
+import { ActivityModule } from '../activity/activity.module';
 
 @Module({
   imports: [
@@ -20,6 +21,7 @@ import { PetsModule } from '../pets/pets.module';
 
     TagsModule,
     PetsModule,
+    ActivityModule,
   ],
 
   controllers: [FoundReportsController, TagFoundReportsController],

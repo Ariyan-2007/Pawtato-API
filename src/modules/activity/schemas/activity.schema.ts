@@ -8,14 +8,21 @@ export type ActivityDocument = HydratedDocument<Activity>;
   timestamps: true,
 })
 export class Activity {
+  // The user who performed the logged action — an admin for admin-panel
+  // actions (block/unblock/role change/tag suspend/retire/bulk-create/
+  // found-report moderation), or the resource's own owner for sensitive
+  // self-service actions (tag assign/unassign/claim, pet lost/found).
   @Prop({
     type: Types.ObjectId,
     ref: 'User',
+    required: true,
+    index: true,
   })
-  admin!: Types.ObjectId;
+  actor!: Types.ObjectId;
 
   @Prop({
     required: true,
+    index: true,
   })
   action!: string;
 
@@ -32,3 +39,5 @@ export class Activity {
 }
 
 export const ActivitySchema = SchemaFactory.createForClass(Activity);
+
+ActivitySchema.index({ createdAt: -1 });

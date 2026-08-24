@@ -16,16 +16,24 @@ export class Tag {
   })
   publicCode!: string;
 
-  // The user who created (and therefore owns) this tag — the authority for
-  // who may assign/unassign/delete it, independent of which pet it happens
-  // to be linked to at any given moment.
+  // The user who created/claimed (and therefore owns) this tag — the
+  // authority for who may assign/unassign/delete it, independent of which
+  // pet it happens to be linked to at any given moment. Null only while the
+  // tag is admin-manufactured inventory (status MANUFACTURED) that no one
+  // has claimed yet — see TagsService.claim().
   @Prop({
     type: Types.ObjectId,
     ref: 'User',
-    required: true,
+    default: null,
     index: true,
   })
-  ownerId!: Types.ObjectId;
+  ownerId!: Types.ObjectId | null;
+
+  // Free-text admin note identifying the manufacturing print run this tag
+  // came from (e.g. "2026-08 batch #3"). Only ever set by bulkCreate();
+  // self-service-created tags leave it unset.
+  @Prop()
+  batchLabel?: string;
 
   // The full URL encoded into the QR image (the frontend's landing route +
   // this tag's publicCode) — stored so it doesn't need to be reconstructed

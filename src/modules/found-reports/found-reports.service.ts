@@ -4,6 +4,7 @@ import {
   HttpStatus,
   Injectable,
   Logger,
+  NotFoundException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { EventEmitter2 } from '@nestjs/event-emitter';
@@ -17,9 +18,12 @@ import { CreateFoundReportDto } from './dto/create-found-report.dto';
 import { TagsService } from '../tags/tags.service';
 import { PetsService } from '../pets/pets.service';
 import { TagStatus } from '../../common/enums/tag-status.enum';
+import { FoundReportStatus } from '../../common/enums/found-report-status.enum';
 import { User } from '../users/schemas/user.schema';
 import { PetDocument } from '../pets/schemas/pet.schema';
 import { DOMAIN_EVENTS } from '../../common/events/domain-events';
+import { ActivityService } from '../activity/activity.service';
+import type { AdminFoundReportQueryDto } from '../admin/dto/admin-found-report-query.dto';
 
 interface PetWithOwner extends Omit<PetDocument, 'owner'> {
   owner: User & { _id: Types.ObjectId };
@@ -47,6 +51,7 @@ export class FoundReportsService {
     private readonly tagsService: TagsService,
     private readonly petsService: PetsService,
     private readonly eventEmitter: EventEmitter2,
+    private readonly activityService: ActivityService,
   ) {}
 
   async create(
@@ -141,6 +146,65 @@ export class FoundReportsService {
         HttpStatus.TOO_MANY_REQUESTS,
       );
     }
+  }
+
+  // Admin abuse-review surface — global, unscoped by pet/tag ownership,
+  // filterable by moderation status and/or deviceFingerprint (the latter is
+  // the one signal available to spot a single device farming reports across
+  // many different tags — see assertNotSpamming() above).
+  async findAllAdmin(query: AdminFoundReportQueryDto) {
+    const { page, limit, status, deviceFingerprint } = query;
+
+    const filter: Record<string, unknown> = {};
+
+    if (status) {
+      filter.status = status;
+    }
+
+    if (deviceFingerprint) {
+      filter.deviceFingerprint = deviceFingerprint;
+    }
+
+    const total = await this.foundReportModel.countDocuments(filter);
+
+    const foundReports = await this.foundReportModel
+      .find(filter)
+      .populate('pet', 'name species')
+      .sort({ createdAt: -1 })
+      .skip((page - 1) * limit)
+      .limit(limit);
+
+    return {
+      foundReports,
+      pagination: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+      },
+    };
+  }
+
+  async updateStatus(id: string, actorId: string, status: FoundReportStatus) {
+    const report = await this.foundReportModel.findByIdAndUpdate(
+      id,
+      {
+        status,
+        reviewedBy: new Types.ObjectId(actorId),
+        reviewedAt: new Date(),
+      },
+      { new: true },
+    );
+
+    if (!report) {
+      throw new NotFoundException('Found report not found');
+    }
+
+    await this.activityService.log(actorId, 'found-report.status-changed', id, {
+      status,
+    });
+
+    return report;
   }
 
   async findForOwnedPet(ownerId: string, petId: string) {

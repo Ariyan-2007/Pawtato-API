@@ -3,10 +3,14 @@ import { UsersService } from '../users/users.service';
 import { PetsService } from '../pets/pets.service';
 import { VaccinationsService } from '../vaccinations/vaccinations.service';
 import { MedicalService } from '../medical/medical.service';
+import { FoundReportsService } from '../found-reports/found-reports.service';
+import { ActivityService } from '../activity/activity.service';
 import { DashboardStatsDto } from './dto/dashboard-stats.dto';
 import { AdminUserQueryDto } from './dto/admin-user-query.dto';
 import { UserRole } from '../../common/enums/user-role.enum';
 import { AdminPetQueryDto } from './dto/admin-pet-query.dto';
+import { AdminFoundReportQueryDto } from './dto/admin-found-report-query.dto';
+import { FoundReportStatus } from '../../common/enums/found-report-status.enum';
 
 @Injectable()
 export class AdminService {
@@ -15,6 +19,8 @@ export class AdminService {
     private readonly petsService: PetsService,
     private readonly vaccinationsService: VaccinationsService,
     private readonly medicalService: MedicalService,
+    private readonly foundReportsService: FoundReportsService,
+    private readonly activityService: ActivityService,
   ) {}
 
   async dashboard(): Promise<DashboardStatsDto> {
@@ -41,20 +47,38 @@ export class AdminService {
     return this.usersService.findById(id);
   }
 
-  async block(id: string) {
-    return this.usersService.blockUser(id);
+  async block(actorId: string, id: string) {
+    const result = await this.usersService.blockUser(id);
+
+    await this.activityService.log(actorId, 'admin.user.blocked', id);
+
+    return result;
   }
 
-  async unblock(id: string) {
-    return this.usersService.unblockUser(id);
+  async unblock(actorId: string, id: string) {
+    const result = await this.usersService.unblockUser(id);
+
+    await this.activityService.log(actorId, 'admin.user.unblocked', id);
+
+    return result;
   }
 
-  async changeRole(id: string, role: UserRole) {
-    return this.usersService.changeRole(id, role);
+  async changeRole(actorId: string, id: string, role: UserRole) {
+    const result = await this.usersService.changeRole(id, role);
+
+    await this.activityService.log(actorId, 'admin.user.role-changed', id, {
+      role,
+    });
+
+    return result;
   }
 
-  async delete(id: string) {
-    return this.usersService.deleteUser(id);
+  async delete(actorId: string, id: string) {
+    const result = await this.usersService.deleteUser(id);
+
+    await this.activityService.log(actorId, 'admin.user.deleted', id);
+
+    return result;
   }
 
   async pets(query: AdminPetQueryDto) {
@@ -65,12 +89,20 @@ export class AdminService {
     return this.petsService.findByIdAdmin(id);
   }
 
-  async recoverPet(id: string) {
-    return this.petsService.recoverPet(id);
+  async recoverPet(actorId: string, id: string) {
+    const result = await this.petsService.recoverPet(id);
+
+    await this.activityService.log(actorId, 'admin.pet.recovered', id);
+
+    return result;
   }
 
-  async deletePet(id: string) {
-    return this.petsService.deletePet(id);
+  async deletePet(actorId: string, id: string) {
+    const result = await this.petsService.deletePet(id);
+
+    await this.activityService.log(actorId, 'admin.pet.deleted', id);
+
+    return result;
   }
 
   async analytics() {
@@ -89,5 +121,17 @@ export class AdminService {
 
       topScannedPets: await this.petsService.topScannedPets(),
     };
+  }
+
+  async foundReports(query: AdminFoundReportQueryDto) {
+    return this.foundReportsService.findAllAdmin(query);
+  }
+
+  async updateFoundReportStatus(
+    actorId: string,
+    id: string,
+    status: FoundReportStatus,
+  ) {
+    return this.foundReportsService.updateStatus(id, actorId, status);
   }
 }

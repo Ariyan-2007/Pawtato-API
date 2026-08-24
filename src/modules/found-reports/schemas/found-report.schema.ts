@@ -1,6 +1,8 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Types } from 'mongoose';
 
+import { FoundReportStatus } from '../../../common/enums/found-report-status.enum';
+
 export type FoundReportDocument = HydratedDocument<FoundReport>;
 
 @Schema({
@@ -50,6 +52,28 @@ export class FoundReport {
     default: () => new Date(),
   })
   foundAt!: Date;
+
+  // Moderation state — admin abuse-review surface (Phase 7). Every report
+  // starts PENDING; an admin triages it as legitimate (REVIEWED) or spam/
+  // malicious (DISMISSED/ACTIONED). Not touched by the finder-facing create
+  // flow at all.
+  @Prop({
+    type: String,
+    enum: FoundReportStatus,
+    default: FoundReportStatus.PENDING,
+    index: true,
+  })
+  status!: FoundReportStatus;
+
+  @Prop({
+    type: Types.ObjectId,
+    ref: 'User',
+    default: null,
+  })
+  reviewedBy!: Types.ObjectId | null;
+
+  @Prop()
+  reviewedAt?: Date;
 }
 
 export const FoundReportSchema = SchemaFactory.createForClass(FoundReport);

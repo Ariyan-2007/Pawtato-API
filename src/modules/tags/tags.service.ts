@@ -14,9 +14,12 @@ import { CreateTagDto } from './dto/create-tag.dto';
 import { AssignTagDto } from './dto/assign-tag.dto';
 import { UnassignTagDto } from './dto/unassign-tag.dto';
 import { TagQueryDto } from './dto/tag-query.dto';
+import { BulkCreateTagsDto } from './dto/bulk-create-tags.dto';
+import { ClaimTagDto } from './dto/claim-tag.dto';
 import { TagStatus } from '../../common/enums/tag-status.enum';
 import { PetsService } from '../pets/pets.service';
 import { QrService } from '../qr/qr.service';
+import { ActivityService } from '../activity/activity.service';
 import { DOMAIN_EVENTS } from '../../common/events/domain-events';
 import { isDuplicateKeyError } from '../../common/utils/mongo.util';
 
@@ -41,16 +44,22 @@ export class TagsService {
 
     private readonly petsService: PetsService,
     private readonly qrService: QrService,
+    private readonly activityService: ActivityService,
     private readonly eventEmitter: EventEmitter2,
   ) {}
 
-  // Self-service: any authenticated user creates their own tag directly (no
-  // admin-seeded inventory to claim). The frontend supplies the route it
-  // wants scans to land on (everything but the code); the backend generates
-  // the code, builds the full link, and renders/stores the QR image for it.
-  async create(ownerId: string, dto: CreateTagDto) {
-    const redirectBase = dto.redirectBaseUrl.replace(/\/+$/, '');
-
+  // Shared by create() (self-service, owned from the start) and bulkCreate()
+  // (admin-manufactured inventory, unowned until claimed) — both need the
+  // same "generate a code, render its QR, retry on collision" mechanics,
+  // differing only in what status/ownerId the resulting document gets.
+  private async generateAndInsertTag(
+    redirectBase: string,
+    fields: {
+      status: TagStatus;
+      ownerId?: Types.ObjectId;
+      batchLabel?: string;
+    },
+  ) {
     for (
       let attempt = 1;
       attempt <= MAX_PUBLIC_CODE_COLLISION_RETRIES;
@@ -66,8 +75,7 @@ export class TagsService {
           publicCode,
           linkUrl,
           qrImageUrl,
-          ownerId: new Types.ObjectId(ownerId),
-          status: TagStatus.AVAILABLE,
+          ...fields,
         });
       } catch (error) {
         // publicCode collisions are astronomically unlikely (nanoid(10) over
@@ -90,6 +98,74 @@ export class TagsService {
 
     // Unreachable — the loop always returns or throws — but keeps TS happy.
     throw new Error('Failed to create a unique tag after retrying');
+  }
+
+  // Self-service: any authenticated user creates their own tag directly (no
+  // admin-seeded inventory to claim). The frontend supplies the route it
+  // wants scans to land on (everything but the code); the backend generates
+  // the code, builds the full link, and renders/stores the QR image for it.
+  async create(ownerId: string, dto: CreateTagDto) {
+    const redirectBase = dto.redirectBaseUrl.replace(/\/+$/, '');
+
+    return this.generateAndInsertTag(redirectBase, {
+      status: TagStatus.AVAILABLE,
+      ownerId: new Types.ObjectId(ownerId),
+    });
+  }
+
+  // Admin-only: manufactures a batch of unowned tags up front (a real print
+  // run), each starting in MANUFACTURED — no owner until a user claims one
+  // via its printed code (see claim() below). Sequential by design: this is
+  // a bounded (<=500), infrequent admin operation, not a hot path, and each
+  // insert's own collision-retry already depends on observing prior inserts.
+  async bulkCreate(actorId: string, dto: BulkCreateTagsDto) {
+    const redirectBase = dto.redirectBaseUrl.replace(/\/+$/, '');
+
+    const tags: TagDocument[] = [];
+
+    for (let i = 0; i < dto.count; i++) {
+      const tag = await this.generateAndInsertTag(redirectBase, {
+        status: TagStatus.MANUFACTURED,
+        batchLabel: dto.batchLabel,
+      });
+
+      tags.push(tag);
+    }
+
+    await this.activityService.log(actorId, 'tag.bulk-created', 'Tag', {
+      count: tags.length,
+      batchLabel: dto.batchLabel ?? null,
+      tagIds: tags.map((tag) => tag._id.toString()),
+    });
+
+    return tags;
+  }
+
+  // Claims a piece of unowned, admin-manufactured inventory into the
+  // caller's name — the missing link between bulkCreate() (no owner yet)
+  // and assign() (requires an owned, AVAILABLE tag). A self-service-created
+  // tag (from create()) never needs this: it's already owned and AVAILABLE.
+  async claim(userId: string, dto: ClaimTagDto) {
+    const tag = await this.tagModel.findOne({ publicCode: dto.publicCode });
+
+    if (!tag) {
+      throw new NotFoundException('Tag not found');
+    }
+
+    if (tag.status !== TagStatus.MANUFACTURED || tag.ownerId) {
+      throw new BadRequestException('This tag is not available to claim');
+    }
+
+    tag.ownerId = new Types.ObjectId(userId);
+    tag.status = TagStatus.AVAILABLE;
+
+    await tag.save();
+
+    await this.activityService.log(userId, 'tag.claimed', tag._id.toString(), {
+      publicCode: tag.publicCode,
+    });
+
+    return tag;
   }
 
   async findAll(query: TagQueryDto) {
@@ -118,7 +194,8 @@ export class TagsService {
 
   // Every tag the caller owns, regardless of status — a newly-created,
   // not-yet-linked tag needs to show up here too, not just ones currently
-  // assigned to a pet.
+  // assigned to a pet. Manufactured-but-unclaimed tags (ownerId null) never
+  // match, correctly — they don't belong to anyone yet.
   async findMine(ownerId: string) {
     return this.tagModel
       .find({ ownerId: new Types.ObjectId(ownerId) })
@@ -150,7 +227,7 @@ export class TagsService {
       return;
     }
 
-    if (!tag.ownerId.equals(callerId)) {
+    if (!tag.ownerId || !tag.ownerId.equals(callerId)) {
       throw new ForbiddenException('You do not own this tag');
     }
   }
@@ -200,13 +277,22 @@ export class TagsService {
 
     await tag.save();
 
-    this.eventEmitter.emit(DOMAIN_EVENTS.TAG_ASSIGNED, {
+    const eventPayload = {
       ownerId,
       tagId: tag._id.toString(),
       publicCode: tag.publicCode,
       petId: pet._id.toString(),
       petName: pet.name,
-    });
+    };
+
+    this.eventEmitter.emit(DOMAIN_EVENTS.TAG_ASSIGNED, eventPayload);
+
+    await this.activityService.log(
+      ownerId,
+      DOMAIN_EVENTS.TAG_ASSIGNED,
+      tag._id.toString(),
+      eventPayload,
+    );
 
     return tag;
   }
@@ -237,14 +323,23 @@ export class TagsService {
     await tag.save();
 
     if (pet) {
-      this.eventEmitter.emit(DOMAIN_EVENTS.TAG_UNASSIGNED, {
+      const eventPayload = {
         ownerId: extractOwnerId(pet.owner),
         tagId: tag._id.toString(),
         publicCode: tag.publicCode,
         petId: pet._id.toString(),
         petName: pet.name,
-      });
+      };
+
+      this.eventEmitter.emit(DOMAIN_EVENTS.TAG_UNASSIGNED, eventPayload);
     }
+
+    await this.activityService.log(
+      ownerId,
+      DOMAIN_EVENTS.TAG_UNASSIGNED,
+      tag._id.toString(),
+      { publicCode: tag.publicCode, petId: pet?._id.toString() ?? null },
+    );
 
     return tag;
   }
@@ -277,10 +372,14 @@ export class TagsService {
     await this.qrService.delete(tag.publicCode);
     await this.tagModel.findByIdAndDelete(tag._id);
 
+    await this.activityService.log(ownerId, 'tag.deleted', id, {
+      publicCode: tag.publicCode,
+    });
+
     return { message: 'Tag deleted successfully' };
   }
 
-  async suspend(id: string) {
+  async suspend(id: string, actorId: string) {
     const tag = await this.findOne(id);
 
     if (tag.status === TagStatus.RETIRED) {
@@ -291,16 +390,27 @@ export class TagsService {
 
     await tag.save();
 
+    await this.activityService.log(
+      actorId,
+      'tag.suspended',
+      tag._id.toString(),
+      { publicCode: tag.publicCode },
+    );
+
     return tag;
   }
 
-  async retire(id: string) {
+  async retire(id: string, actorId: string) {
     const tag = await this.findOne(id);
 
     tag.status = TagStatus.RETIRED;
     tag.assignedPetId = null;
 
     await tag.save();
+
+    await this.activityService.log(actorId, 'tag.retired', tag._id.toString(), {
+      publicCode: tag.publicCode,
+    });
 
     return tag;
   }

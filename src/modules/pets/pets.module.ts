@@ -5,6 +5,7 @@ import { PetsController } from './pets.controller';
 import { PetsService } from './pets.service';
 
 import { Pet, PetSchema } from './schemas/pet.schema';
+import { ActivityModule } from '../activity/activity.module';
 
 @Module({
   imports: [
@@ -14,6 +15,8 @@ import { Pet, PetSchema } from './schemas/pet.schema';
         schema: PetSchema,
       },
     ]),
+
+    ActivityModule,
   ],
 
   controllers: [PetsController],
