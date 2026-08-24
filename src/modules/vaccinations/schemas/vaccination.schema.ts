@@ -11,6 +11,7 @@ export class Vaccination {
     type: Types.ObjectId,
     ref: 'Pet',
     required: true,
+    index: true,
   })
   pet!: Types.ObjectId;
   @Prop({
@@ -47,3 +48,7 @@ export class Vaccination {
 }
 
 export const VaccinationSchema = SchemaFactory.createForClass(Vaccination);
+
+// Backs VaccinationReminderJob's daily sweep:
+// `{ reminderSent: false, nextDueDate: { $gte, $lte } }`.
+VaccinationSchema.index({ reminderSent: 1, nextDueDate: 1 });

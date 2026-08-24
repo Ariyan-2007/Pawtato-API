@@ -2,6 +2,7 @@ import {
   BadRequestException,
   HttpException,
   HttpStatus,
+  Inject,
   Injectable,
   Logger,
   NotFoundException,
@@ -23,6 +24,8 @@ import { User } from '../users/schemas/user.schema';
 import { PetDocument } from '../pets/schemas/pet.schema';
 import { DOMAIN_EVENTS } from '../../common/events/domain-events';
 import { ActivityService } from '../activity/activity.service';
+import { STORAGE_PROVIDER } from '../storage/storage.constants';
+import type { StorageProvider } from '../storage/interfaces/storage-provider.interface';
 import type { AdminFoundReportQueryDto } from '../admin/dto/admin-found-report-query.dto';
 
 interface PetWithOwner extends Omit<PetDocument, 'owner'> {
@@ -52,6 +55,9 @@ export class FoundReportsService {
     private readonly petsService: PetsService,
     private readonly eventEmitter: EventEmitter2,
     private readonly activityService: ActivityService,
+
+    @Inject(STORAGE_PROVIDER)
+    private readonly storageProvider: StorageProvider,
   ) {}
 
   async create(
@@ -221,5 +227,42 @@ export class FoundReportsService {
     const tag = await this.tagsService.findOwnedById(ownerId, tagId, isAdmin);
 
     return this.foundReportModel.find({ tag: tag._id }).sort({ createdAt: -1 });
+  }
+
+  // Cascade delete — every found report tied to any of these pets or tags,
+  // plus each report's stored photo. Called from AdminService when a pet, a
+  // tag's owning pet, or a whole user (pets + tags together) is deleted.
+  async deleteAllForPetsAndTags(petIds: string[], tagIds: string[]) {
+    if (petIds.length === 0 && tagIds.length === 0) {
+      return { deletedCount: 0 };
+    }
+
+    const filter = {
+      $or: [
+        { pet: { $in: petIds.map((id) => new Types.ObjectId(id)) } },
+        { tag: { $in: tagIds.map((id) => new Types.ObjectId(id)) } },
+      ],
+    };
+
+    const reports = await this.foundReportModel.find(filter).select('photoUrl');
+
+    for (const report of reports) {
+      if (!report.photoUrl) {
+        continue;
+      }
+
+      try {
+        await this.storageProvider.deleteByUrl(report.photoUrl);
+      } catch (error) {
+        this.logger.error(
+          `Failed to delete found-report photo: ${report.photoUrl}`,
+          error instanceof Error ? error.stack : undefined,
+        );
+      }
+    }
+
+    const result = await this.foundReportModel.deleteMany(filter);
+
+    return { deletedCount: result.deletedCount };
   }
 }

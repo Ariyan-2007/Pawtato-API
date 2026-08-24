@@ -28,8 +28,10 @@ describe('Health (e2e)', () => {
       expect.objectContaining({
         success: true,
         data: expect.objectContaining({
-          success: true,
-          message: 'Pawtato API is running',
+          status: 'ok',
+          dependencies: expect.objectContaining({
+            database: { status: 'up', readyState: 1 },
+          }) as unknown,
         }) as unknown,
       }),
     );

@@ -23,6 +23,8 @@ describe('TagsService', () => {
     findOne: jest.Mock;
     findById: jest.Mock;
     findByIdAndDelete: jest.Mock;
+    distinct: jest.Mock;
+    deleteMany: jest.Mock;
   };
   let petsService: { findOwnedPet: jest.Mock; findByIdAdmin: jest.Mock };
   let qrService: { generate: jest.Mock; delete: jest.Mock };
@@ -53,6 +55,8 @@ describe('TagsService', () => {
       findOne: jest.fn(),
       findById: jest.fn(),
       findByIdAndDelete: jest.fn(),
+      distinct: jest.fn(),
+      deleteMany: jest.fn().mockResolvedValue({ deletedCount: 0 }),
     };
     petsService = { findOwnedPet: jest.fn(), findByIdAdmin: jest.fn() };
     qrService = {
@@ -527,6 +531,79 @@ describe('TagsService', () => {
       await expect(
         service.claim(userId, { publicCode: 'MISSING' }),
       ).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('cascade delete helpers', () => {
+    describe('findIdsForOwner / findIdsForPet', () => {
+      it('returns owned tag ids as strings', async () => {
+        const id = new Types.ObjectId();
+        tagModel.distinct.mockResolvedValue([id]);
+
+        const result = await service.findIdsForOwner(ownerId);
+
+        expect(tagModel.distinct).toHaveBeenCalledWith('_id', {
+          ownerId: new Types.ObjectId(ownerId),
+        });
+        expect(result).toEqual([id.toString()]);
+      });
+
+      it('returns the ids of tags assigned to a given pet', async () => {
+        const id = new Types.ObjectId();
+        const petId = new Types.ObjectId().toString();
+        tagModel.distinct.mockResolvedValue([id]);
+
+        const result = await service.findIdsForPet(petId);
+
+        expect(tagModel.distinct).toHaveBeenCalledWith('_id', {
+          assignedPetId: new Types.ObjectId(petId),
+        });
+        expect(result).toEqual([id.toString()]);
+      });
+    });
+
+    describe('deleteAllForOwner / deleteAllForPet', () => {
+      it('deletes every owned tag along with its QR image, without emitting any domain event', async () => {
+        const tags = [makeTag(), makeTag({ publicCode: 'XYZ789' })];
+        tagModel.find.mockResolvedValue(tags);
+
+        const result = await service.deleteAllForOwner(ownerId);
+
+        expect(tagModel.find).toHaveBeenCalledWith({
+          ownerId: new Types.ObjectId(ownerId),
+        });
+        expect(qrService.delete).toHaveBeenCalledWith('ABC123');
+        expect(qrService.delete).toHaveBeenCalledWith('XYZ789');
+        expect(tagModel.deleteMany).toHaveBeenCalledWith({
+          ownerId: new Types.ObjectId(ownerId),
+        });
+        expect(eventEmitter.emit).not.toHaveBeenCalled();
+        expect(result).toEqual({ deletedCount: 2 });
+      });
+
+      it('scopes deleteAllForPet to only the tag(s) assigned to that pet', async () => {
+        const petId = new Types.ObjectId().toString();
+        tagModel.find.mockResolvedValue([makeTag()]);
+
+        await service.deleteAllForPet(petId);
+
+        expect(tagModel.find).toHaveBeenCalledWith({
+          assignedPetId: new Types.ObjectId(petId),
+        });
+        expect(tagModel.deleteMany).toHaveBeenCalledWith({
+          assignedPetId: new Types.ObjectId(petId),
+        });
+      });
+
+      it('still deletes the tag documents even when a QR image fails to delete', async () => {
+        tagModel.find.mockResolvedValue([makeTag()]);
+        qrService.delete.mockRejectedValue(new Error('storage down'));
+
+        const result = await service.deleteAllForOwner(ownerId);
+
+        expect(tagModel.deleteMany).toHaveBeenCalled();
+        expect(result).toEqual({ deletedCount: 1 });
+      });
     });
   });
 });

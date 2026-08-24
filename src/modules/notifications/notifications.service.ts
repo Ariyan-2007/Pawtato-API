@@ -169,6 +169,17 @@ export class NotificationsService {
     return { deletedCount: result.deletedCount };
   }
 
+  // Cascade delete — every notification belonging to this user, regardless
+  // of which pet (if any) it references. Called from AdminService when the
+  // user itself is deleted.
+  async deleteAllForUser(userId: string) {
+    const result = await this.notificationModel.deleteMany({
+      user: new Types.ObjectId(userId),
+    });
+
+    return { deletedCount: result.deletedCount };
+  }
+
   // Called when a pet is reported found: any CRITICAL (missing-context) scan
   // or found-report notification for that pet is downgraded to STALE_MISSING
   // and given a 1-day expiry, instead of staying pinned forever.

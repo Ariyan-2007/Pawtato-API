@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 
 import { Vaccination, VaccinationDocument } from './schemas/vaccination.schema';
 
@@ -40,5 +40,20 @@ export class VaccinationsService {
 
   async count(): Promise<number> {
     return this.vaccinationModel.countDocuments();
+  }
+
+  // Cascade delete — no files to clean up here (vaccination records have no
+  // stored attachments of their own), just the documents. Called from
+  // AdminService when a pet (or its owner) is deleted.
+  async deleteAllForPets(petIds: string[]) {
+    if (petIds.length === 0) {
+      return { deletedCount: 0 };
+    }
+
+    const result = await this.vaccinationModel.deleteMany({
+      pet: { $in: petIds.map((id) => new Types.ObjectId(id)) },
+    });
+
+    return { deletedCount: result.deletedCount };
   }
 }

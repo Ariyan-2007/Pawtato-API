@@ -25,6 +25,7 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { AdminModule } from './modules/admin/admin.module';
 import { ActivityModule } from './modules/activity/activity.module';
 import { StorageModule } from './modules/storage/storage.module';
+import { DatingModule } from './modules/dating/dating.module';
 
 @Module({
   imports: [
@@ -60,6 +61,11 @@ import { StorageModule } from './modules/storage/storage.module';
         ttl: 60_000,
         limit: 5,
       },
+      {
+        name: 'swipe',
+        ttl: 60_000,
+        limit: 60,
+      },
     ]),
 
     StorageModule,
@@ -93,6 +99,8 @@ import { StorageModule } from './modules/storage/storage.module';
     AdminModule,
 
     ActivityModule,
+
+    DatingModule,
   ],
   providers: [
     {

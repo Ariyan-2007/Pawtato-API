@@ -30,6 +30,8 @@ import { AdminUserQueryDto } from './dto/admin-user-query.dto';
 import { AdminPetQueryDto } from './dto/admin-pet-query.dto';
 import { AdminFoundReportQueryDto } from './dto/admin-found-report-query.dto';
 import { UpdateFoundReportStatusDto } from './dto/update-found-report-status.dto';
+import { AdminDatingReportQueryDto } from './dto/admin-dating-report-query.dto';
+import { UpdateDatingReportStatusDto } from './dto/update-dating-report-status.dto';
 import { DashboardStatsDto } from './dto/dashboard-stats.dto';
 import { DashboardAnalyticsDto } from './dto/dashboard-analytics.dto';
 
@@ -219,5 +221,61 @@ export class AdminController {
     dto: UpdateFoundReportStatusDto,
   ) {
     return this.adminService.updateFoundReportStatus(user.sub, id, dto.status);
+  }
+
+  @ApiOperation({
+    summary: 'List dating-profile abuse reports for moderation (admin only)',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Paginated list of dating reports.',
+  })
+  @Get('dating/reports')
+  findAllDatingReports(
+    @Query()
+    query: AdminDatingReportQueryDto,
+  ) {
+    return this.adminService.datingReports(query);
+  }
+
+  @ApiOperation({
+    summary: "Update a dating report's moderation status (admin only)",
+    description:
+      'Stamps `reviewedBy`/`reviewedAt` with the acting admin. Does not itself deactivate the ' +
+      'reported profile — pair with PATCH /admin/dating/profiles/{petId}/deactivate when warranted.',
+  })
+  @ApiParam({ name: 'id', description: 'Dating report ID' })
+  @ApiResponse({ status: 200, description: 'Dating report status updated.' })
+  @ApiResponse({ status: 404, description: 'Dating report not found.' })
+  @Patch('dating/reports/:id/status')
+  updateDatingReportStatus(
+    @CurrentUser() user: JwtPayload,
+
+    @Param('id', ParseMongoIdPipe)
+    id: string,
+
+    @Body()
+    dto: UpdateDatingReportStatusDto,
+  ) {
+    return this.adminService.updateDatingReportStatus(user.sub, id, dto.status);
+  }
+
+  @ApiOperation({
+    summary: "Deactivate a pet's dating profile (admin only)",
+    description:
+      'Sets `isActive: false` on the profile — the pet drops out of discovery immediately. ' +
+      'Existing matches/messages are left untouched.',
+  })
+  @ApiParam({ name: 'petId', description: 'Pet ID' })
+  @ApiResponse({ status: 200, description: 'Dating profile deactivated.' })
+  @ApiResponse({ status: 404, description: 'Dating profile not found.' })
+  @Patch('dating/profiles/:petId/deactivate')
+  deactivateDatingProfile(
+    @CurrentUser() user: JwtPayload,
+
+    @Param('petId', ParseMongoIdPipe)
+    petId: string,
+  ) {
+    return this.adminService.deactivateDatingProfile(user.sub, petId);
   }
 }
