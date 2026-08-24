@@ -7,6 +7,7 @@ import { PetsService } from './pets.service';
 import { Pet } from './schemas/pet.schema';
 import { DOMAIN_EVENTS } from '../../common/events/domain-events';
 import { STORAGE_PROVIDER } from '../storage/storage.constants';
+import { ActivityService } from '../activity/activity.service';
 
 describe('PetsService', () => {
   let service: PetsService;
@@ -18,6 +19,7 @@ describe('PetsService', () => {
   };
   let storageProvider: { deleteByUrl: jest.Mock };
   let eventEmitter: { emit: jest.Mock };
+  let activityService: { log: jest.Mock };
 
   const ownerId = new Types.ObjectId().toString();
   const otherOwnerId = new Types.ObjectId().toString();
@@ -34,12 +36,14 @@ describe('PetsService', () => {
       deleteByUrl: jest.fn(),
     };
     eventEmitter = { emit: jest.fn() };
+    activityService = { log: jest.fn().mockResolvedValue(undefined) };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         PetsService,
         { provide: getModelToken(Pet.name), useValue: petModel },
         { provide: EventEmitter2, useValue: eventEmitter },
+        { provide: ActivityService, useValue: activityService },
         { provide: STORAGE_PROVIDER, useValue: storageProvider },
       ],
     }).compile();
@@ -159,6 +163,12 @@ describe('PetsService', () => {
         DOMAIN_EVENTS.PET_MARKED_LOST,
         expect.objectContaining({ ownerId, petId, petName: 'Milo' }),
       );
+      expect(activityService.log).toHaveBeenCalledWith(
+        ownerId,
+        DOMAIN_EVENTS.PET_MARKED_LOST,
+        petId,
+        { petName: 'Milo' },
+      );
     });
 
     it('reportFound clears every lost-specific field and emits pet.marked-found', async () => {
@@ -182,6 +192,12 @@ describe('PetsService', () => {
         DOMAIN_EVENTS.PET_MARKED_FOUND,
         expect.objectContaining({ ownerId, petId, petName: 'Milo' }),
       );
+      expect(activityService.log).toHaveBeenCalledWith(
+        ownerId,
+        DOMAIN_EVENTS.PET_MARKED_FOUND,
+        petId,
+        { petName: 'Milo' },
+      );
     });
 
     it('does not let a failed owner-email populate block the lost report from succeeding', async () => {
@@ -192,6 +208,7 @@ describe('PetsService', () => {
 
       await expect(service.reportLost(ownerId, petId, {})).resolves.toBe(pet);
       expect(eventEmitter.emit).not.toHaveBeenCalled();
+      expect(activityService.log).toHaveBeenCalled();
     });
   });
 

@@ -1,4 +1,8 @@
-import { BadRequestException, HttpException } from '@nestjs/common';
+import {
+  BadRequestException,
+  HttpException,
+  NotFoundException,
+} from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getModelToken } from '@nestjs/mongoose';
 import { EventEmitter2 } from '@nestjs/event-emitter';
@@ -8,7 +12,9 @@ import { FoundReportsService } from './found-reports.service';
 import { FoundReport } from './schemas/found-report.schema';
 import { TagsService } from '../tags/tags.service';
 import { PetsService } from '../pets/pets.service';
+import { ActivityService } from '../activity/activity.service';
 import { TagStatus } from '../../common/enums/tag-status.enum';
+import { FoundReportStatus } from '../../common/enums/found-report-status.enum';
 
 describe('FoundReportsService', () => {
   let service: FoundReportsService;
@@ -17,9 +23,11 @@ describe('FoundReportsService', () => {
     exists: jest.Mock;
     countDocuments: jest.Mock;
     find: jest.Mock;
+    findByIdAndUpdate: jest.Mock;
   };
   let tagsService: { findByPublicCode: jest.Mock; findOwnedById: jest.Mock };
   let petsService: { findOwnedPet: jest.Mock; findWithOwner: jest.Mock };
+  let activityService: { log: jest.Mock };
 
   const tagId = new Types.ObjectId();
   const petId = new Types.ObjectId();
@@ -35,6 +43,7 @@ describe('FoundReportsService', () => {
       exists: jest.fn().mockResolvedValue(null),
       countDocuments: jest.fn().mockResolvedValue(0),
       find: jest.fn(),
+      findByIdAndUpdate: jest.fn(),
     };
     tagsService = {
       findByPublicCode: jest.fn().mockResolvedValue({
@@ -48,6 +57,7 @@ describe('FoundReportsService', () => {
       findOwnedPet: jest.fn(),
       findWithOwner: jest.fn().mockResolvedValue(null),
     };
+    activityService = { log: jest.fn().mockResolvedValue(undefined) };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -59,6 +69,7 @@ describe('FoundReportsService', () => {
         { provide: TagsService, useValue: tagsService },
         { provide: PetsService, useValue: petsService },
         { provide: EventEmitter2, useValue: {} },
+        { provide: ActivityService, useValue: activityService },
       ],
     }).compile();
 
@@ -134,6 +145,70 @@ describe('FoundReportsService', () => {
       );
       expect(foundReportModel.find).toHaveBeenCalledWith({ tag: tagId });
       expect(sort).toHaveBeenCalledWith({ createdAt: -1 });
+    });
+  });
+
+  describe('findAllAdmin', () => {
+    it('filters by status and deviceFingerprint when provided', async () => {
+      const limit = jest.fn().mockResolvedValue([]);
+      const skip = jest.fn().mockReturnValue({ limit });
+      const sort = jest.fn().mockReturnValue({ skip });
+      const populate = jest.fn().mockReturnValue({ sort });
+      foundReportModel.find.mockReturnValue({ populate });
+
+      await service.findAllAdmin({
+        page: 1,
+        limit: 10,
+        status: FoundReportStatus.PENDING,
+        deviceFingerprint: 'device-1',
+      });
+
+      expect(foundReportModel.find).toHaveBeenCalledWith({
+        status: FoundReportStatus.PENDING,
+        deviceFingerprint: 'device-1',
+      });
+    });
+  });
+
+  describe('updateStatus', () => {
+    it('stamps reviewedBy/reviewedAt and logs the moderation action', async () => {
+      const reportId = new Types.ObjectId().toString();
+      const actorId = new Types.ObjectId().toString();
+      foundReportModel.findByIdAndUpdate.mockResolvedValue({
+        _id: reportId,
+        status: FoundReportStatus.DISMISSED,
+      });
+
+      const result = await service.updateStatus(
+        reportId,
+        actorId,
+        FoundReportStatus.DISMISSED,
+      );
+
+      expect(foundReportModel.findByIdAndUpdate).toHaveBeenCalledWith(
+        reportId,
+        expect.objectContaining({
+          status: FoundReportStatus.DISMISSED,
+          reviewedAt: expect.any(Date) as Date,
+        }),
+        { new: true },
+      );
+      expect(activityService.log).toHaveBeenCalledWith(
+        actorId,
+        'found-report.status-changed',
+        reportId,
+        { status: FoundReportStatus.DISMISSED },
+      );
+      expect(result.status).toBe(FoundReportStatus.DISMISSED);
+    });
+
+    it('throws NotFoundException for an unknown report id', async () => {
+      foundReportModel.findByIdAndUpdate.mockResolvedValue(null);
+      const actorId = new Types.ObjectId().toString();
+
+      await expect(
+        service.updateStatus('missing', actorId, FoundReportStatus.REVIEWED),
+      ).rejects.toThrow(NotFoundException);
     });
   });
 });

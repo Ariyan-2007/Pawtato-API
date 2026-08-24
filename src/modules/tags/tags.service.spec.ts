@@ -12,6 +12,7 @@ import { TagsService } from './tags.service';
 import { Tag } from './schemas/tag.schema';
 import { PetsService } from '../pets/pets.service';
 import { QrService } from '../qr/qr.service';
+import { ActivityService } from '../activity/activity.service';
 import { TagStatus } from '../../common/enums/tag-status.enum';
 
 describe('TagsService', () => {
@@ -25,6 +26,7 @@ describe('TagsService', () => {
   };
   let petsService: { findOwnedPet: jest.Mock; findByIdAdmin: jest.Mock };
   let qrService: { generate: jest.Mock; delete: jest.Mock };
+  let activityService: { log: jest.Mock };
   let eventEmitter: { emit: jest.Mock };
 
   const ownerId = new Types.ObjectId().toString();
@@ -57,6 +59,7 @@ describe('TagsService', () => {
       generate: jest.fn().mockResolvedValue('/uploads/qrcodes/ABC123.png'),
       delete: jest.fn().mockResolvedValue(undefined),
     };
+    activityService = { log: jest.fn().mockResolvedValue(undefined) };
     eventEmitter = { emit: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -65,6 +68,7 @@ describe('TagsService', () => {
         { provide: getModelToken(Tag.name), useValue: tagModel },
         { provide: PetsService, useValue: petsService },
         { provide: QrService, useValue: qrService },
+        { provide: ActivityService, useValue: activityService },
         { provide: EventEmitter2, useValue: eventEmitter },
       ],
     }).compile();
@@ -253,6 +257,12 @@ describe('TagsService', () => {
         'tag.assigned',
         expect.objectContaining({ petId: pet._id.toString() }),
       );
+      expect(activityService.log).toHaveBeenCalledWith(
+        ownerId,
+        'tag.assigned',
+        expect.any(String),
+        expect.objectContaining({ petId: pet._id.toString() }),
+      );
     });
   });
 
@@ -386,14 +396,22 @@ describe('TagsService', () => {
   });
 
   describe('suspend/retire lifecycle', () => {
-    it('suspends an available/assigned tag', async () => {
+    const adminId = new Types.ObjectId().toString();
+
+    it('suspends an available/assigned tag and logs it', async () => {
       const tag = makeTag();
       tagModel.findById.mockResolvedValue(tag);
 
-      const result = await service.suspend('tag-id');
+      const result = await service.suspend('tag-id', adminId);
 
       expect(result.status).toBe(TagStatus.SUSPENDED);
       expect(tag.save).toHaveBeenCalled();
+      expect(activityService.log).toHaveBeenCalledWith(
+        adminId,
+        'tag.suspended',
+        expect.any(String),
+        expect.objectContaining({ publicCode: tag.publicCode }),
+      );
     });
 
     it('rejects suspending an already-retired tag', async () => {
@@ -401,22 +419,114 @@ describe('TagsService', () => {
         makeTag({ status: TagStatus.RETIRED }),
       );
 
-      await expect(service.suspend('tag-id')).rejects.toThrow(
+      await expect(service.suspend('tag-id', adminId)).rejects.toThrow(
         BadRequestException,
       );
     });
 
-    it('retire clears any active assignment', async () => {
+    it('retire clears any active assignment and logs it', async () => {
       const tag = makeTag({
         status: TagStatus.ASSIGNED,
         assignedPetId: new Types.ObjectId(),
       });
       tagModel.findById.mockResolvedValue(tag);
 
-      const result = await service.retire('tag-id');
+      const result = await service.retire('tag-id', adminId);
 
       expect(result.status).toBe(TagStatus.RETIRED);
       expect(result.assignedPetId).toBeNull();
+      expect(activityService.log).toHaveBeenCalledWith(
+        adminId,
+        'tag.retired',
+        expect.any(String),
+        expect.objectContaining({ publicCode: tag.publicCode }),
+      );
+    });
+  });
+
+  describe('bulkCreate', () => {
+    it('manufactures `count` unowned tags in MANUFACTURED status and logs one batch entry', async () => {
+      const adminId = new Types.ObjectId().toString();
+      tagModel.create.mockImplementation((doc: Record<string, unknown>) =>
+        Promise.resolve({ _id: new Types.ObjectId(), ...doc }),
+      );
+
+      const tags = await service.bulkCreate(adminId, {
+        count: 3,
+        redirectBaseUrl: 'https://pawtato.ariyan.app/qr/',
+        batchLabel: 'batch-1',
+      });
+
+      expect(tags).toHaveLength(3);
+      expect(tagModel.create).toHaveBeenCalledTimes(3);
+      expect(tagModel.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: TagStatus.MANUFACTURED,
+          batchLabel: 'batch-1',
+        }),
+      );
+      expect(
+        (tagModel.create.mock.calls[0] as [Record<string, unknown>])[0],
+      ).not.toHaveProperty('ownerId');
+      expect(activityService.log).toHaveBeenCalledTimes(1);
+      expect(activityService.log).toHaveBeenCalledWith(
+        adminId,
+        'tag.bulk-created',
+        'Tag',
+        expect.objectContaining({ count: 3, batchLabel: 'batch-1' }),
+      );
+    });
+  });
+
+  describe('claim', () => {
+    const userId = new Types.ObjectId().toString();
+
+    it('claims an unowned MANUFACTURED tag into the caller, setting it AVAILABLE', async () => {
+      const tag = makeTag({
+        status: TagStatus.MANUFACTURED,
+        ownerId: null,
+      });
+      tagModel.findOne.mockResolvedValue(tag);
+
+      const result = await service.claim(userId, { publicCode: 'ABC123' });
+
+      expect(result.status).toBe(TagStatus.AVAILABLE);
+      expect(result.ownerId.toString()).toBe(userId);
+      expect(tag.save).toHaveBeenCalled();
+      expect(activityService.log).toHaveBeenCalledWith(
+        userId,
+        'tag.claimed',
+        expect.any(String),
+        { publicCode: 'ABC123' },
+      );
+    });
+
+    it('rejects claiming a tag that already has an owner', async () => {
+      tagModel.findOne.mockResolvedValue(
+        makeTag({ status: TagStatus.MANUFACTURED }),
+      );
+
+      await expect(
+        service.claim(userId, { publicCode: 'ABC123' }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('rejects claiming a tag that is not MANUFACTURED (e.g. already AVAILABLE)', async () => {
+      tagModel.findOne.mockResolvedValue(
+        makeTag({ status: TagStatus.AVAILABLE, ownerId: null }),
+      );
+
+      await expect(
+        service.claim(userId, { publicCode: 'ABC123' }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('throws NotFoundException for an unknown public code', async () => {
+      tagModel.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.claim(userId, { publicCode: 'MISSING' }),
+      ).rejects.toThrow(NotFoundException);
     });
   });
 });

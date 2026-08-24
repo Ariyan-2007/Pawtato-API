@@ -11,6 +11,7 @@ import { User } from '../users/schemas/user.schema';
 import { DOMAIN_EVENTS } from '../../common/events/domain-events';
 import { STORAGE_PROVIDER } from '../storage/storage.constants';
 import type { StorageProvider } from '../storage/interfaces/storage-provider.interface';
+import { ActivityService } from '../activity/activity.service';
 
 @Injectable()
 export class PetsService {
@@ -21,6 +22,7 @@ export class PetsService {
     private readonly petModel: Model<PetDocument>,
 
     private readonly eventEmitter: EventEmitter2,
+    private readonly activityService: ActivityService,
 
     @Inject(STORAGE_PROVIDER)
     private readonly storageProvider: StorageProvider,
@@ -182,6 +184,13 @@ export class PetsService {
 
     await this.emitOwnerEvent(DOMAIN_EVENTS.PET_MARKED_LOST, ownerId, pet);
 
+    await this.activityService.log(
+      ownerId,
+      DOMAIN_EVENTS.PET_MARKED_LOST,
+      petId,
+      { petName: pet.name },
+    );
+
     return pet;
   }
 
@@ -208,6 +217,13 @@ export class PetsService {
     }
 
     await this.emitOwnerEvent(DOMAIN_EVENTS.PET_MARKED_FOUND, ownerId, pet);
+
+    await this.activityService.log(
+      ownerId,
+      DOMAIN_EVENTS.PET_MARKED_FOUND,
+      petId,
+      { petName: pet.name },
+    );
 
     return pet;
   }

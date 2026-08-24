@@ -43,8 +43,10 @@ export class PublicController {
     summary: "Get a pet's public profile by its tag's public code",
     description:
       'No authentication required. This is the page a QR-code scan resolves to. ' +
-      'If the tag is not currently linked to a pet (or is suspended/retired), returns a ' +
-      'status message instead of a pet profile. Never returns owner-private information ' +
+      'If the tag is not currently linked to a pet (unclaimed manufactured inventory, ' +
+      'claimed but never assigned, or suspended/retired), returns a status message instead ' +
+      'of a pet profile — branch on `tagStatus` (`MANUFACTURED` | `AVAILABLE` | `ASSIGNED` | ' +
+      '`SUSPENDED` | `RETIRED`), not on HTTP status. Never returns owner-private information ' +
       '(password, internal IDs, unshared contact details).',
   })
   @ApiResponse({

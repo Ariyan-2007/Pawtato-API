@@ -60,6 +60,7 @@ This file is a **living, incremental** companion to `PAWTATO_ROADMAP.md`, writte
 | # | Flow | Status | Roadmap phase |
 |---|------|--------|----------------|
 | 1 | Lost & Found (register → tag a pet → public scan → found report → resolve) | **Integration-ready** | Phase 6 (e2e-verified 2026-08-24) |
+| 2 | Admin Tag Inventory & Abuse Review (manufacture tags → claim → moderate found reports → audit log) | **Integration-ready** | Phase 7 (e2e-verified 2026-08-24) |
 
 ---
 
@@ -171,12 +172,14 @@ Two calls. `POST /tags` generates the tag (unlinked); `POST /tags/assign` links 
 ```
 This response **never** contains the pet's or owner's internal id, or any owner-identifying field (`_id`, `owner`, email, etc.) — verified by a dedicated regression test. Safe to render directly to an anonymous finder.
 
-Three other shapes the same endpoint can return, all still `200` — **branch your UI on `tagStatus`, not on HTTP status**:
+Four other shapes the same endpoint can return, all still `200` — **branch your UI on `tagStatus`, not on HTTP status**:
 ```json
 { "tagStatus": "AVAILABLE", "message": "This QR is not linked to a pet." }   // code exists but was never assigned, OR doesn't exist at all
+{ "tagStatus": "MANUFACTURED", "message": "This QR is not linked to a pet." }   // admin-manufactured inventory (Flow 2), not yet claimed by anyone — see Flow 2 step 2
 { "tagStatus": "SUSPENDED", "message": "This tag has been suspended." }
 { "tagStatus": "RETIRED",   "message": "This tag has been retired and is no longer in use." }
 ```
+(`MANUFACTURED` added in Phase 7 — see Flow 2.)
 `petStatus` is only present when `tagStatus === "ASSIGNED"`; it's `"MISSING"` or `"SAFE"`, driven directly by `isLost` — use it for copy/urgency styling rather than re-deriving it from `isLost` yourself. Rate-limited (`public` tier) — handle `429`.
 
 `GET /public/lost-pets` 🌐 — no params, returns every currently-lost pet:
@@ -248,6 +251,113 @@ The full set of `type` values you'll see: `pet.marked-lost`, `pet.marked-found`,
 
 ---
 
+## Flow 2 — Admin Tag Inventory & Abuse Review
+
+**What this covers:** the admin/operator side of spec §24 — manufacturing a batch of physical QR tags before anyone owns them, a user claiming a manufactured tag into their own name, reviewing finder reports flagged as spam/malicious, and every one of those actions (plus the tag-lifecycle actions from Flow 1) showing up in an audit log. Proven end-to-end by `test/admin-audit-flow.e2e-spec.ts` (real HTTP, real database) — see the Phase 7 entry in `PAWTATO_ROADMAP.md`.
+
+**Every route in this flow is 🔒, and every route except claim additionally requires the caller's JWT to carry `role: "ADMIN"`** — a non-admin token gets `403`, not `404` (unlike the ownership-IDOR convention in Flow 1, this is a real role check, so it's fine for the UI to distinguish "you're not an admin" from "not found").
+
+**Becoming an admin isn't self-service.** There is no signup flow that grants `ADMIN` — an existing account's `role` field has to be changed directly (either by another admin via `PATCH /admin/users/{id}/role`, or, for the very first admin, direct DB access). If you're building an admin panel, assume its users already have `ADMIN` tokens by the time they reach it; don't build a "become an admin" screen against this API.
+
+**Sequence:**
+1. An operator (already `ADMIN`) manufactures a batch of unowned tags — the physical print run exists before any customer owns one.
+2. A user claims one of those tags into their own name using its printed code — no different from how they'd receive a physical sticker in the mail.
+3. From here on, the tag behaves exactly like a self-service-created tag from Flow 1 — assign it to a pet, it gets scanned, a finder reports it.
+4. An admin reviews the found-report moderation queue and marks a report `REVIEWED`, `DISMISSED`, or `ACTIONED`.
+5. Independently, an admin can force-suspend or retire *any* tag (not just ones tied to a report) — e.g. a tag reported as fraudulent that never went through the found-report flow at all.
+6. An admin can block/unblock a user, change their role, or delete their account.
+7. Everything above is now visible in `GET /activity`, filterable by who did it and what they did.
+
+### 1. Bulk-manufacture tags 🔒 (admin only)
+`POST /tags/bulk`
+
+```json
+// request
+{ "count": 50, "redirectBaseUrl": "https://your-frontend.app/qr/", "batchLabel": "2026-08 print run #3" }
+```
+```json
+// 201 response data — array of Tag, every one starting MANUFACTURED with no owner
+[
+  { "_id": "64f...", "publicCode": "PT9K2A44", "ownerId": null, "status": "MANUFACTURED", "batchLabel": "2026-08 print run #3", "qrImageUrl": "/uploads/qrcodes/PT9K2A44.png", "linkUrl": "https://your-frontend.app/qr/PT9K2A44" }
+]
+```
+`count` is capped at 500 per call. `redirectBaseUrl` works exactly like Flow 1's `POST /tags` — the backend builds each tag's `linkUrl` from it plus a generated code and renders the QR PNG at creation time, before anyone owns the tag. `batchLabel` is optional and purely for the admin's own print-run bookkeeping — never shown to an end user. `403` for a non-admin caller.
+
+### 2. Claim a manufactured tag 🔒
+`POST /tags/claim`
+
+```json
+// request
+{ "publicCode": "PT9K2A44" }
+```
+```json
+// 201 response data — same Tag shape, now owned and AVAILABLE
+{ "...": "...", "status": "AVAILABLE", "ownerId": "64e..." }
+```
+Any authenticated user can call this — it's the counterpart to Flow 1's self-service `POST /tags`, for a tag that started as admin-manufactured inventory instead. `400` if the code doesn't currently point at unclaimed `MANUFACTURED` inventory (already claimed, or was self-service-created and therefore never had this state at all). Once claimed, the tag is indistinguishable from a self-service one — assign it via the same `POST /tags/assign` from Flow 1.
+
+**Scan-time note:** a `MANUFACTURED`, not-yet-claimed tag can still be scanned publicly — see the updated Flow 1 step 5 (`GET /public/tags/:publicCode`), which now documents five possible `tagStatus` values instead of four.
+
+### 3. Review the found-report moderation queue 🔒 (admin only)
+`GET /admin/found-reports?page=1&limit=10&status=PENDING`
+
+```json
+// 200 response data
+{
+  "foundReports": [
+    {
+      "_id": "64f...", "tag": "64f...", "pet": { "_id": "64f...", "name": "Milo", "species": "Cat" },
+      "message": "Spam link: definitely-not-a-scam.example", "deviceFingerprint": "abc123...",
+      "status": "PENDING", "reviewedBy": null, "reviewedAt": null,
+      "approxLocation": null, "contactInfo": null, "photoUrl": null,
+      "foundAt": "2026-08-24T...", "createdAt": "2026-08-24T..."
+    }
+  ],
+  "pagination": { "total": 1, "page": 1, "limit": 10, "totalPages": 1 }
+}
+```
+Every finder-submitted report ever recorded, across every owner — unlike Flow 1's `GET /pets/{petId}/found-reports` (scoped to one owner's pet), this is the global moderation view. `status` and `deviceFingerprint` are both optional filters; the latter is the useful one for spotting abuse — pull every report from one device across every tag it's touched, using the same fingerprint value the Phase 3 spam rate-limiter already keys on.
+
+### 4. Update a found report's moderation status 🔒 (admin only)
+`PATCH /admin/found-reports/{id}/status`
+
+```json
+// request
+{ "status": "DISMISSED" }
+```
+```json
+// 200 response data — the updated FoundReport, reviewedBy/reviewedAt now stamped
+{ "...": "...", "status": "DISMISSED", "reviewedBy": "64e...", "reviewedAt": "2026-08-24T..." }
+```
+`REVIEWED` = looked at, legitimate. `DISMISSED` = spam/not credible, no further action. `ACTIONED` = spam/malicious and something was done about it. **This call never itself suspends the associated tag** — if a report warrants that, pair it explicitly with step 5 below. `404` for an unknown report id.
+
+### 5. Force-suspend / retire a tag 🔒 (admin only)
+`PATCH /tags/{id}/suspend` and `PATCH /tags/{id}/retire` — unchanged from Flow 1/Phase 2 (no request body, returns the updated `Tag`), included here because it's the other half of abuse handling: usable on *any* tag, whether or not a found-report ever triggered it. A suspended/retired tag's public scan response changes to `{ "tagStatus": "SUSPENDED", ... }` / `"RETIRED"` immediately.
+
+### 6. User moderation 🔒 (admin only)
+`PATCH /admin/users/{id}/block`, `PATCH /admin/users/{id}/unblock`, `PATCH /admin/users/{id}/role`, `DELETE /admin/users/{id}` — all pre-existing from the Phase 1 baseline, included here because Phase 7 is what made them start writing to the audit log. A blocked user's **existing access token stops working immediately** (`401`, not just a future-login block) — `JwtStrategy` checks `isActive` on every request, not just at login.
+
+### 7. Audit log 🔒 (admin only)
+`GET /activity?page=1&limit=20&actor=64e...&action=tag.suspended`
+
+```json
+// 200 response data
+{
+  "activities": [
+    {
+      "_id": "64f...", "actor": { "_id": "64e...", "fullName": "Ops Admin", "email": "admin@example.com" },
+      "action": "tag.suspended", "target": "64f...", "metadata": { "publicCode": "PT9K2A44" },
+      "createdAt": "2026-08-24T..."
+    }
+  ],
+  "pagination": { "total": 1, "page": 1, "limit": 20, "totalPages": 1 }
+}
+```
+Covers both admin-panel actions (`admin.user.blocked`, `admin.user.unblocked`, `admin.user.role-changed`, `admin.user.deleted`, `admin.pet.recovered`, `admin.pet.deleted`, `tag.suspended`, `tag.retired`, `tag.bulk-created`, `found-report.status-changed`) and sensitive self-service actions performed by any user (`tag.assigned`, `tag.unassigned`, `tag.deleted`, `tag.claimed`, `pet.marked-lost`, `pet.marked-found`) — `actor` is whoever performed the action, not necessarily an admin. Both `actor` (a user id) and `action` (an exact string, see the list above) are optional filters. `target` is the affected resource's id as a plain string (a `Tag`/`Pet`/`User` id depending on `action`) — not populated into an object, unlike `actor`.
+
+---
+
 ## Changelog
 
 - **2026-08-24** — File created. Documented Flow 1 (Lost & Found), the first flow to be e2e-verified (Phase 6).
+- **2026-08-24** — Documented Flow 2 (Admin Tag Inventory & Abuse Review), e2e-verified in Phase 7. Also updated Flow 1 step 5 (`GET /public/tags/:publicCode`) in place: Phase 7 added a fifth possible `tagStatus` value, `MANUFACTURED`, for admin-manufactured inventory no one has claimed yet (see Flow 2 step 2).

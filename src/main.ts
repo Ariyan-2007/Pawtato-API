@@ -73,7 +73,10 @@ async function bootstrap() {
     .addTag('Authentication', 'Register, login, and token issuance')
     .addTag('Users', "Authenticated user's own profile")
     .addTag('Pets', "CRUD and lost/found status for a caller's own pets")
-    .addTag('Tags', 'QR tag inventory and assign/unassign lifecycle')
+    .addTag(
+      'Tags',
+      'QR tag inventory and assign/unassign lifecycle, including admin bulk-manufacturing and claiming',
+    )
     .addTag(
       'Public',
       'Unauthenticated routes: tag resolution, lost-pets listing, found reports',
@@ -86,8 +89,14 @@ async function bootstrap() {
       'Notifications',
       "The caller's in-app notification feed (list, mark as read)",
     )
-    .addTag('Admin', 'Admin-only dashboard, user, and pet management')
-    .addTag('Activity', 'Admin action audit log')
+    .addTag(
+      'Admin',
+      'Admin-only dashboard, user/pet management, and found-report abuse review',
+    )
+    .addTag(
+      'Activity',
+      'Audit log of admin actions and sensitive self-service actions (tag lifecycle, lost/found status)',
+    )
     .addTag('Health', 'Liveness check')
     .build();
 

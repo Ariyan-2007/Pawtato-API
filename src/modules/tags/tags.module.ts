@@ -6,6 +6,7 @@ import { TagsService } from './tags.service';
 import { Tag, TagSchema } from './schemas/tag.schema';
 
 import { PetsModule } from '../pets/pets.module';
+import { ActivityModule } from '../activity/activity.module';
 
 @Module({
   imports: [
@@ -17,6 +18,7 @@ import { PetsModule } from '../pets/pets.module';
     ]),
 
     PetsModule,
+    ActivityModule,
   ],
 
   controllers: [TagsController],
