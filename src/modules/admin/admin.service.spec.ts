@@ -10,10 +10,12 @@ import { MedicalService } from '../medical/medical.service';
 import { FoundReportsService } from '../found-reports/found-reports.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { DatingService } from '../dating/dating.service';
+import { IdentityVerificationService } from '../dating/identity-verification.service';
 import { ActivityService } from '../activity/activity.service';
 import { UserRole } from '../../common/enums/user-role.enum';
 import { FoundReportStatus } from '../../common/enums/found-report-status.enum';
 import { DatingReportStatus } from '../../common/enums/dating-report-status.enum';
+import { IdentityVerificationStatus } from '../../common/enums/identity-verification-status.enum';
 
 describe('AdminService', () => {
   let service: AdminService;
@@ -55,6 +57,13 @@ describe('AdminService', () => {
     adminListReports: jest.Mock;
     adminUpdateReportStatus: jest.Mock;
     adminDeactivateProfile: jest.Mock;
+  };
+  let identityVerificationService: {
+    adminList: jest.Mock;
+    adminGetSignedImages: jest.Mock;
+    adminApprove: jest.Mock;
+    adminReject: jest.Mock;
+    deleteForUser: jest.Mock;
   };
   let activityService: { log: jest.Mock };
 
@@ -114,6 +123,19 @@ describe('AdminService', () => {
         .mockResolvedValue({ status: DatingReportStatus.REVIEWED }),
       adminDeactivateProfile: jest.fn().mockResolvedValue({ isActive: false }),
     };
+    identityVerificationService = {
+      adminList: jest.fn().mockResolvedValue({ verifications: [] }),
+      adminGetSignedImages: jest
+        .fn()
+        .mockResolvedValue({ frontUrl: 'front', backUrl: 'back' }),
+      adminApprove: jest
+        .fn()
+        .mockResolvedValue({ status: IdentityVerificationStatus.APPROVED }),
+      adminReject: jest
+        .fn()
+        .mockResolvedValue({ status: IdentityVerificationStatus.REJECTED }),
+      deleteForUser: jest.fn().mockResolvedValue({ deletedCount: 0 }),
+    };
     activityService = { log: jest.fn().mockResolvedValue(undefined) };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -128,6 +150,10 @@ describe('AdminService', () => {
         { provide: FoundReportsService, useValue: foundReportsService },
         { provide: NotificationsService, useValue: notificationsService },
         { provide: DatingService, useValue: datingService },
+        {
+          provide: IdentityVerificationService,
+          useValue: identityVerificationService,
+        },
         { provide: ActivityService, useValue: activityService },
       ],
     }).compile();
@@ -225,6 +251,9 @@ describe('AdminService', () => {
       expect(vaccinationsService.deleteAllForPets).toHaveBeenCalledWith(petIds);
       expect(datingService.deleteAllForPets).toHaveBeenCalledWith(petIds);
       expect(datingService.deleteReportsByReporter).toHaveBeenCalledWith(
+        'user-1',
+      );
+      expect(identityVerificationService.deleteForUser).toHaveBeenCalledWith(
         'user-1',
       );
       expect(tagsService.deleteAllForOwner).toHaveBeenCalledWith('user-1');
@@ -362,6 +391,43 @@ describe('AdminService', () => {
       expect(datingService.adminDeactivateProfile).toHaveBeenCalledWith(
         actorId,
         'pet-1',
+      );
+    });
+  });
+
+  describe('identity verification delegation', () => {
+    it('identityVerifications delegates to IdentityVerificationService.adminList', async () => {
+      const query = { page: 1, limit: 10 };
+
+      await service.identityVerifications(query);
+
+      expect(identityVerificationService.adminList).toHaveBeenCalledWith(query);
+    });
+
+    it('identityVerificationImages delegates to IdentityVerificationService.adminGetSignedImages', async () => {
+      await service.identityVerificationImages(actorId, 'v1');
+
+      expect(
+        identityVerificationService.adminGetSignedImages,
+      ).toHaveBeenCalledWith(actorId, 'v1');
+    });
+
+    it('approveIdentityVerification delegates to IdentityVerificationService.adminApprove', async () => {
+      await service.approveIdentityVerification(actorId, 'v1');
+
+      expect(identityVerificationService.adminApprove).toHaveBeenCalledWith(
+        actorId,
+        'v1',
+      );
+    });
+
+    it('rejectIdentityVerification delegates to IdentityVerificationService.adminReject', async () => {
+      await service.rejectIdentityVerification(actorId, 'v1', 'blurry');
+
+      expect(identityVerificationService.adminReject).toHaveBeenCalledWith(
+        actorId,
+        'v1',
+        'blurry',
       );
     });
   });

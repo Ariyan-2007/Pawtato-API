@@ -1,8 +1,10 @@
 import {
   DeleteObjectCommand,
+  GetObjectCommand,
   PutObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3';
+import { getSignedUrl as presignS3Url } from '@aws-sdk/s3-request-presigner';
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'crypto';
@@ -72,10 +74,34 @@ export class S3StorageProvider implements StorageProvider {
     return `https://${this.bucket}.s3.${this.region}.amazonaws.com/${key}`;
   }
 
+  // Same bucket/mechanism as upload() — S3 has no separate "private root"
+  // the way local disk does. The privacy guarantee here rests entirely on
+  // never calling getUrl()/publicUrl construction for these keys and only
+  // ever handing out a presigned getSignedUrl() below. In production this
+  // bucket (or at minimum the folder these keys live under, e.g. `nid/`)
+  // must NOT have a public-read bucket policy — that's a deployment/infra
+  // requirement this code can't enforce, the same class of open item the
+  // roadmap already flags for Docker/CI (see PAWTATO_ROADMAP.md Phase 11).
+  async uploadPrivate(input: StorageUploadInput): Promise<string> {
+    return this.upload(input);
+  }
+
+  async getSignedUrl(key: string, expiresInSeconds: number): Promise<string> {
+    return presignS3Url(
+      this.client,
+      new GetObjectCommand({ Bucket: this.bucket, Key: key }),
+      { expiresIn: expiresInSeconds },
+    );
+  }
+
   async delete(key: string): Promise<void> {
     await this.client.send(
       new DeleteObjectCommand({ Bucket: this.bucket, Key: key }),
     );
+  }
+
+  async deletePrivate(key: string): Promise<void> {
+    await this.delete(key);
   }
 
   async deleteByUrl(url: string): Promise<void> {

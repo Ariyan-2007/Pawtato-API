@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import type { ConfigService } from '@nestjs/config';
 
 import { LocalDiskStorageProvider } from './local-disk-storage.provider';
 
@@ -14,10 +15,17 @@ jest.mock('fs', () => ({
 
 describe('LocalDiskStorageProvider', () => {
   let provider: LocalDiskStorageProvider;
+  let configService: { getOrThrow: jest.Mock; get: jest.Mock };
 
   beforeEach(() => {
     jest.clearAllMocks();
-    provider = new LocalDiskStorageProvider();
+    configService = {
+      getOrThrow: jest.fn().mockReturnValue('test-secret'),
+      get: jest.fn().mockReturnValue(undefined),
+    };
+    provider = new LocalDiskStorageProvider(
+      configService as unknown as ConfigService,
+    );
   });
 
   describe('upload', () => {
@@ -122,6 +130,66 @@ describe('LocalDiskStorageProvider', () => {
 
       await expect(provider.delete('avatars/foo.png')).rejects.toThrow(
         'permission denied',
+      );
+    });
+  });
+
+  describe('uploadPrivate', () => {
+    it('writes under private-uploads, not uploads', async () => {
+      (fs.existsSync as jest.Mock).mockReturnValue(true);
+
+      const key = await provider.uploadPrivate({
+        buffer: Buffer.from('data'),
+        folder: 'identity-verification',
+        originalName: 'nid-front.png',
+        mimetype: 'image/png',
+        filename: 'nid-front.png',
+      });
+
+      expect(key).toBe('identity-verification/nid-front.png');
+      expect(fs.promises.writeFile).toHaveBeenCalledWith(
+        path.join(
+          process.cwd(),
+          'private-uploads',
+          'identity-verification',
+          'nid-front.png',
+        ),
+        Buffer.from('data'),
+      );
+    });
+  });
+
+  describe('getSignedUrl', () => {
+    it('returns a URL pointing at the storage/private route with a signed token', async () => {
+      configService.get.mockImplementation(
+        (key: string) =>
+          ({ 'app.url': 'http://localhost:5000', 'app.apiPrefix': 'api' })[key],
+      );
+
+      const url = await provider.getSignedUrl(
+        'identity-verification/x.png',
+        300,
+      );
+
+      expect(url).toMatch(
+        /^http:\/\/localhost:5000\/api\/storage\/private\/.+$/,
+      );
+    });
+  });
+
+  describe('deletePrivate', () => {
+    it('unlinks from private-uploads, not uploads', async () => {
+      (fs.promises.unlink as jest.Mock).mockResolvedValue(undefined);
+
+      await provider.deletePrivate('identity-verification/x.png');
+
+      expect(fs.promises.unlink).toHaveBeenCalledWith(
+        path.join(
+          process.cwd(),
+          'private-uploads',
+          'identity-verification',
+          'x.png',
+        ),
       );
     });
   });

@@ -1,7 +1,7 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Types } from 'mongoose';
 
-import { DatingPurpose } from '../../../common/enums/dating-purpose.enum';
+import { DatingMode } from '../../../common/enums/dating-mode.enum';
 
 export type PetDatingProfileDocument = HydratedDocument<PetDatingProfile>;
 
@@ -21,12 +21,22 @@ export class PetDatingProfile {
   })
   petId!: Types.ObjectId;
 
+  // A profile can be enabled for either or both modes independently — see
+  // DatingService.discover()/swipe() for how each mode's compatibility rule
+  // (species-restricted for BREEDING, unrestricted for PLAYDATE) is enforced.
+  // Phase 11 replaces the old single `purpose: PLAYDATE|BREEDING|BOTH` field
+  // with this array; see PAWTATO_ROADMAP.md Phase 11 for the rationale.
   @Prop({
-    type: String,
-    enum: DatingPurpose,
+    type: [String],
+    enum: DatingMode,
     required: true,
+    validate: {
+      validator: (value: DatingMode[]) =>
+        Array.isArray(value) && value.length > 0,
+      message: 'At least one dating mode must be enabled',
+    },
   })
-  purpose!: DatingPurpose;
+  modes!: DatingMode[];
 
   @Prop({
     trim: true,
@@ -39,6 +49,27 @@ export class PetDatingProfile {
     default: [],
   })
   temperamentTags!: string[];
+
+  @Prop({
+    type: [String],
+    default: [],
+  })
+  likes!: string[];
+
+  @Prop({
+    type: [String],
+    default: [],
+  })
+  dislikes!: string[];
+
+  // All-or-nothing toggle (decided 2026-08-25 — see PAWTATO_ROADMAP.md Phase
+  // 11): when true, profile reads include a `medicalSummary` computed live
+  // from MedicalService/VaccinationsService (never stored here). When false,
+  // the summary is omitted entirely, not sent empty.
+  @Prop({
+    default: false,
+  })
+  shareHealthSummary!: boolean;
 
   // A curated gallery separate from Pet.profileImage — owner-supplied URLs
   // (e.g. already uploaded via the existing generic upload machinery), not a

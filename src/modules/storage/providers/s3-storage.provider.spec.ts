@@ -7,6 +7,7 @@ interface MockCommandInput {
 }
 
 const sendMock = jest.fn<Promise<unknown>, [MockCommandInput]>();
+const presignMock = jest.fn<Promise<string>, unknown[]>();
 
 jest.mock('@aws-sdk/client-s3', () => ({
   S3Client: jest.fn().mockImplementation(() => ({ send: sendMock })),
@@ -20,6 +21,15 @@ jest.mock('@aws-sdk/client-s3', () => ({
     .mockImplementation((input: Record<string, unknown>): MockCommandInput => ({
       input,
     })),
+  GetObjectCommand: jest
+    .fn()
+    .mockImplementation((input: Record<string, unknown>): MockCommandInput => ({
+      input,
+    })),
+}));
+
+jest.mock('@aws-sdk/s3-request-presigner', () => ({
+  getSignedUrl: (...args: unknown[]) => presignMock(...args),
 }));
 
 describe('S3StorageProvider', () => {
@@ -111,6 +121,51 @@ describe('S3StorageProvider', () => {
       expect(sentInput).toMatchObject({
         Bucket: 'pawtato-media',
         Key: 'avatars/photo.png',
+      });
+    });
+  });
+
+  describe('uploadPrivate', () => {
+    it('uploads the same way as upload() — S3 has no separate private root', async () => {
+      sendMock.mockResolvedValue({});
+
+      const key = await provider.uploadPrivate({
+        buffer: Buffer.from('data'),
+        folder: 'identity-verification',
+        originalName: 'nid-front.png',
+        mimetype: 'image/png',
+        filename: 'nid-front.png',
+      });
+
+      expect(key).toBe('identity-verification/nid-front.png');
+    });
+  });
+
+  describe('getSignedUrl', () => {
+    it('returns a presigned GetObject URL', async () => {
+      presignMock.mockResolvedValue('https://presigned.example/x');
+
+      const url = await provider.getSignedUrl(
+        'identity-verification/x.png',
+        300,
+      );
+
+      expect(url).toBe('https://presigned.example/x');
+      expect(presignMock).toHaveBeenCalled();
+    });
+  });
+
+  describe('deletePrivate', () => {
+    it('sends a DeleteObjectCommand for the given key', async () => {
+      sendMock.mockResolvedValue({});
+
+      await provider.deletePrivate('identity-verification/x.png');
+
+      const sentInput = sendMock.mock.calls[0][0].input;
+
+      expect(sentInput).toMatchObject({
+        Bucket: 'pawtato-media',
+        Key: 'identity-verification/x.png',
       });
     });
   });

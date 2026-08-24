@@ -64,7 +64,7 @@ export class PetDatingProfileController {
   }
 
   @ApiOperation({
-    summary: "Verify a pet's health records for BREEDING/BOTH visibility",
+    summary: "Verify a pet's health records for BREEDING visibility",
     description:
       'Sets `healthVerified: true` only after confirming the pet already has at least one ' +
       'medical record and one vaccination record — never settable directly via create/update.',
@@ -77,7 +77,7 @@ export class PetDatingProfileController {
   @ApiResponse({
     status: 400,
     description:
-      'Profile is PLAYDATE-only, or the pet is missing a medical/vaccination record.',
+      "Profile doesn't have BREEDING enabled, or the pet is missing a medical/vaccination record.",
   })
   @ApiResponse({ status: 404, description: 'Pet or dating profile not found.' })
   @Patch('verify-health')
