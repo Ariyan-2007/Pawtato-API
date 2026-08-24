@@ -37,6 +37,18 @@ export class Match {
     default: MatchStatus.ACTIVE,
   })
   status!: MatchStatus;
+
+  // Owner userIds who've tapped "share my ID" within *this* match (Phase 11
+  // — explicit per-match consent, not automatic on match). Sharing is
+  // per-direction: a userId here makes that owner's NID viewable by the
+  // other side, independent of whether the other side has shared back. See
+  // DatingService.shareNid()/getNidExchange().
+  @Prop({
+    type: [Types.ObjectId],
+    ref: 'User',
+    default: [],
+  })
+  nidSharedBy!: Types.ObjectId[];
 }
 
 export const MatchSchema = SchemaFactory.createForClass(Match);

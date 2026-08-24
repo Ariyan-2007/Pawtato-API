@@ -20,14 +20,24 @@ function data<T>(res: Response): T {
   return (res.body as ApiEnvelope<T>).data;
 }
 
-// Covers Phase 10 (Pet Dating & Companion Matching) end-to-end over real
-// HTTP + a real DB: two owners each opt a pet into dating, discover each
-// other, swipe, match on a mutual LIKE, exchange a message, and a report
-// against one profile works its way through admin moderation. Also proves
-// the server-side guards the roadmap's Definition of Done calls out
-// explicitly: species-only matching, purpose compatibility, and no
-// duplicate Match from a race (covered at the unit level in
-// dating.service.spec.ts; this file proves the real HTTP path once).
+// A tiny valid 1x1 transparent PNG — enough to pass imageFileFilter and
+// actually be written to disk, so the identity-verification block below can
+// exercise the real private-storage path, not just a mocked one.
+const ONE_PIXEL_PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+  'base64',
+);
+
+const DATING_PHOTOS = ['https://your-app.example/uploads/pets/photo1.png'];
+
+// Covers Phase 10 (Pet Dating & Companion Matching) *and* Phase 11's rework
+// (mode split, identity verification + explicit per-match NID sharing)
+// end-to-end over real HTTP + a real DB: two owners each opt a pet into
+// dating, discover each other in PLAYDATE, swipe, match on a mutual LIKE,
+// exchange a message, report/moderation, then both submit identity
+// verification, get approved, and exercise the share/view NID flow within
+// their existing match. Also proves the Phase 11 mode-split guards
+// explicitly: BREEDING is species-restricted, PLAYDATE is not.
 describe('Pet dating flow (e2e)', () => {
   let app: INestApplication<App>;
   let userModel: Model<UserDocument>;
@@ -131,21 +141,31 @@ describe('Pet dating flow (e2e)', () => {
     await request(app.getHttpServer())
       .post(`/api/pets/${parrotId}/dating-profile`)
       .set('Authorization', `Bearer ${ownerAAccessToken}`)
-      .send({ purpose: 'PLAYDATE' })
+      .send({ modes: ['PLAYDATE'], photos: DATING_PHOTOS })
       .expect(400);
   });
 
-  it('both owners create a PLAYDATE dating profile for their cat', async () => {
+  it('both owners create a PLAYDATE+BREEDING dating profile for their cat', async () => {
     await request(app.getHttpServer())
       .post(`/api/pets/${petAId}/dating-profile`)
       .set('Authorization', `Bearer ${ownerAAccessToken}`)
-      .send({ purpose: 'PLAYDATE', bio: 'Loves chasing string.' })
+      .send({
+        modes: ['PLAYDATE', 'BREEDING'],
+        bio: 'Loves chasing string.',
+        likes: ['string toys'],
+        dislikes: ['baths'],
+        photos: DATING_PHOTOS,
+      })
       .expect(201);
 
     await request(app.getHttpServer())
       .post(`/api/pets/${petBId}/dating-profile`)
       .set('Authorization', `Bearer ${ownerBAccessToken}`)
-      .send({ purpose: 'PLAYDATE', bio: 'Enjoys sunny windowsills.' })
+      .send({
+        modes: ['PLAYDATE', 'BREEDING'],
+        bio: 'Enjoys sunny windowsills.',
+        photos: DATING_PHOTOS,
+      })
       .expect(201);
   });
 
@@ -153,15 +173,15 @@ describe('Pet dating flow (e2e)', () => {
     await request(app.getHttpServer())
       .post(`/api/pets/${petAId}/dating-profile`)
       .set('Authorization', `Bearer ${ownerAAccessToken}`)
-      .send({ purpose: 'PLAYDATE' })
+      .send({ modes: ['PLAYDATE'], photos: DATING_PHOTOS })
       .expect(400);
   });
 
-  it("owner A discovers owner B's cat as a candidate", async () => {
+  it("owner A discovers owner B's cat as a PLAYDATE candidate", async () => {
     const res = await request(app.getHttpServer())
       .get('/api/dating/discover')
       .set('Authorization', `Bearer ${ownerAAccessToken}`)
-      .query({ petId: petAId })
+      .query({ petId: petAId, mode: 'PLAYDATE' })
       .expect(200);
 
     const page = data<{
@@ -172,29 +192,102 @@ describe('Pet dating flow (e2e)', () => {
     expect(candidateIds).toContain(petBId);
   });
 
-  it('owner A swiping LIKE on owner B alone does not yet create a match', async () => {
+  describe('mode split — BREEDING is species-restricted, PLAYDATE is not', () => {
+    let dogId: string;
+
+    it('owner A adds a dog and enables it for both modes', async () => {
+      const dogRes = await request(app.getHttpServer())
+        .post('/api/pets')
+        .set('Authorization', `Bearer ${ownerAAccessToken}`)
+        .send({ name: 'Dating Dog A', species: 'Dog' })
+        .expect(201);
+      dogId = data<{ _id: string }>(dogRes)._id;
+
+      await request(app.getHttpServer())
+        .post(`/api/pets/${dogId}/dating-profile`)
+        .set('Authorization', `Bearer ${ownerAAccessToken}`)
+        .send({ modes: ['PLAYDATE', 'BREEDING'], photos: DATING_PHOTOS })
+        .expect(201);
+    });
+
+    it("the dog never appears in owner B's cat's BREEDING pool", async () => {
+      const res = await request(app.getHttpServer())
+        .get('/api/dating/discover')
+        .set('Authorization', `Bearer ${ownerBAccessToken}`)
+        .query({ petId: petBId, mode: 'BREEDING' })
+        .expect(200);
+
+      const page = data<{ profiles: Array<{ petId: { _id: string } }> }>(res);
+      const candidateIds = page.profiles.map((p) => p.petId._id);
+
+      expect(candidateIds).not.toContain(dogId);
+    });
+
+    it("the dog DOES appear in owner B's cat's PLAYDATE pool", async () => {
+      const res = await request(app.getHttpServer())
+        .get('/api/dating/discover')
+        .set('Authorization', `Bearer ${ownerBAccessToken}`)
+        .query({ petId: petBId, mode: 'PLAYDATE' })
+        .expect(200);
+
+      const page = data<{ profiles: Array<{ petId: { _id: string } }> }>(res);
+      const candidateIds = page.profiles.map((p) => p.petId._id);
+
+      expect(candidateIds).toContain(dogId);
+    });
+
+    it('a BREEDING swipe across species is rejected server-side', async () => {
+      await request(app.getHttpServer())
+        .post('/api/dating/swipe')
+        .set('Authorization', `Bearer ${ownerBAccessToken}`)
+        .send({
+          fromPetId: petBId,
+          toPetId: dogId,
+          action: 'LIKE',
+          mode: 'BREEDING',
+        })
+        .expect(400);
+    });
+  });
+
+  it('owner A swiping LIKE on owner B alone (PLAYDATE) does not yet create a match', async () => {
     const res = await request(app.getHttpServer())
       .post('/api/dating/swipe')
       .set('Authorization', `Bearer ${ownerAAccessToken}`)
-      .send({ fromPetId: petAId, toPetId: petBId, action: 'LIKE' })
+      .send({
+        fromPetId: petAId,
+        toPetId: petBId,
+        action: 'LIKE',
+        mode: 'PLAYDATE',
+      })
       .expect(201);
 
     expect(data<{ match: unknown }>(res).match).toBeNull();
   });
 
-  it('swiping the same pet twice is rejected', async () => {
+  it('swiping the same pet twice in the same mode is rejected', async () => {
     await request(app.getHttpServer())
       .post('/api/dating/swipe')
       .set('Authorization', `Bearer ${ownerAAccessToken}`)
-      .send({ fromPetId: petAId, toPetId: petBId, action: 'LIKE' })
+      .send({
+        fromPetId: petAId,
+        toPetId: petBId,
+        action: 'LIKE',
+        mode: 'PLAYDATE',
+      })
       .expect(400);
   });
 
-  it('a mutual LIKE from owner B creates a Match immediately', async () => {
+  it('a mutual LIKE (same mode) from owner B creates a Match immediately', async () => {
     const res = await request(app.getHttpServer())
       .post('/api/dating/swipe')
       .set('Authorization', `Bearer ${ownerBAccessToken}`)
-      .send({ fromPetId: petBId, toPetId: petAId, action: 'LIKE' })
+      .send({
+        fromPetId: petBId,
+        toPetId: petAId,
+        action: 'LIKE',
+        mode: 'PLAYDATE',
+      })
       .expect(201);
 
     const match = data<{ match: { _id: string; status: string } | null }>(
@@ -205,7 +298,7 @@ describe('Pet dating flow (e2e)', () => {
     matchId = match!._id;
   });
 
-  it('the match now shows up for both owners', async () => {
+  it('the match now shows up for both owners, with the originating mode attached', async () => {
     const resA = await request(app.getHttpServer())
       .get('/api/dating/matches')
       .set('Authorization', `Bearer ${ownerAAccessToken}`)
@@ -216,12 +309,13 @@ describe('Pet dating flow (e2e)', () => {
       .set('Authorization', `Bearer ${ownerBAccessToken}`)
       .expect(200);
 
+    const matchesA = data<Array<{ _id: string; mode: string }>>(resA);
+    const matchesB = data<Array<{ _id: string; mode: string }>>(resB);
+
     expect(
-      data<Array<{ _id: string }>>(resA).some((m) => m._id === matchId),
+      matchesA.some((m) => m._id === matchId && m.mode === 'PLAYDATE'),
     ).toBe(true);
-    expect(
-      data<Array<{ _id: string }>>(resB).some((m) => m._id === matchId),
-    ).toBe(true);
+    expect(matchesB.some((m) => m._id === matchId)).toBe(true);
   });
 
   it('a third, unrelated user cannot see or message the match', async () => {
@@ -250,6 +344,136 @@ describe('Pet dating flow (e2e)', () => {
 
     const messages = data<Array<{ content: string }>>(res);
     expect(messages.some((m) => m.content.includes('playdate'))).toBe(true);
+  });
+
+  describe('identity verification + explicit per-match NID sharing (Phase 11)', () => {
+    it('viewing NID exchange before either side is verified is rejected', async () => {
+      await request(app.getHttpServer())
+        .get(`/api/dating/matches/${matchId}/nid`)
+        .set('Authorization', `Bearer ${ownerAAccessToken}`)
+        .expect(400);
+    });
+
+    it('both owners submit identity verification and land in PENDING', async () => {
+      for (const token of [ownerAAccessToken, ownerBAccessToken]) {
+        await request(app.getHttpServer())
+          .post('/api/dating/verification')
+          .set('Authorization', `Bearer ${token}`)
+          .attach('front', ONE_PIXEL_PNG, {
+            filename: 'front.png',
+            contentType: 'image/png',
+          })
+          .attach('back', ONE_PIXEL_PNG, {
+            filename: 'back.png',
+            contentType: 'image/png',
+          })
+          .expect(201);
+
+        const statusRes = await request(app.getHttpServer())
+          .get('/api/dating/verification/me')
+          .set('Authorization', `Bearer ${token}`)
+          .expect(200);
+
+        expect(data<{ status: string }>(statusRes).status).toBe('PENDING');
+      }
+    });
+
+    it('a non-admin cannot see the verification queue', async () => {
+      await request(app.getHttpServer())
+        .get('/api/admin/dating/verifications')
+        .set('Authorization', `Bearer ${ownerAAccessToken}`)
+        .expect(403);
+    });
+
+    let ownerAVerificationId: string;
+    let ownerBVerificationId: string;
+
+    it('admin sees both submissions pending, and can fetch signed review images', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/api/admin/dating/verifications')
+        .set('Authorization', `Bearer ${adminAccessToken}`)
+        .query({ status: 'PENDING' })
+        .expect(200);
+
+      const page = data<{
+        verifications: Array<{ _id: string; userId: { email: string } }>;
+      }>(res);
+
+      const ownerAEntry = page.verifications.find(
+        (v) => v.userId?.email === ownerAEmail,
+      );
+      const ownerBEntry = page.verifications.find(
+        (v) => v.userId?.email === ownerBEmail,
+      );
+      expect(ownerAEntry).toBeDefined();
+      expect(ownerBEntry).toBeDefined();
+      ownerAVerificationId = ownerAEntry!._id;
+      ownerBVerificationId = ownerBEntry!._id;
+
+      const imagesRes = await request(app.getHttpServer())
+        .get(`/api/admin/dating/verifications/${ownerAVerificationId}/images`)
+        .set('Authorization', `Bearer ${adminAccessToken}`)
+        .expect(200);
+
+      const images = data<{ frontUrl: string; backUrl: string }>(imagesRes);
+      expect(images.frontUrl).toContain('/api/storage/private/');
+      expect(images.backUrl).toContain('/api/storage/private/');
+    });
+
+    it('admin approves both submissions', async () => {
+      for (const id of [
+        () => ownerAVerificationId,
+        () => ownerBVerificationId,
+      ]) {
+        const res = await request(app.getHttpServer())
+          .patch(`/api/admin/dating/verifications/${id()}/approve`)
+          .set('Authorization', `Bearer ${adminAccessToken}`)
+          .expect(200);
+
+        expect(data<{ status: string }>(res).status).toBe('APPROVED');
+      }
+    });
+
+    it('viewing NID exchange still fails until the other side shares', async () => {
+      await request(app.getHttpServer())
+        .get(`/api/dating/matches/${matchId}/nid`)
+        .set('Authorization', `Bearer ${ownerAAccessToken}`)
+        .expect(400);
+    });
+
+    it('owner B shares, owner A can then view a signed URL to it', async () => {
+      await request(app.getHttpServer())
+        .post(`/api/dating/matches/${matchId}/share-nid`)
+        .set('Authorization', `Bearer ${ownerBAccessToken}`)
+        .expect(201);
+
+      const res = await request(app.getHttpServer())
+        .get(`/api/dating/matches/${matchId}/nid`)
+        .set('Authorization', `Bearer ${ownerAAccessToken}`)
+        .expect(200);
+
+      const urls = data<{ frontUrl: string; backUrl: string }>(res);
+      expect(urls.frontUrl).toContain('/api/storage/private/');
+
+      // The signed URL itself is fetchable — proves the private file is
+      // real and the token-gated route actually serves it, not just that
+      // the URL was constructed.
+      const path = urls.frontUrl.replace(/^https?:\/\/[^/]+/, '');
+      await request(app.getHttpServer()).get(path).expect(200);
+    });
+
+    it("owner B still cannot view owner A's NID (sharing is one-directional until A also shares)", async () => {
+      await request(app.getHttpServer())
+        .get(`/api/dating/matches/${matchId}/nid`)
+        .set('Authorization', `Bearer ${ownerBAccessToken}`)
+        .expect(400);
+    });
+
+    it('a stale/invalid storage token is rejected, not silently served', async () => {
+      await request(app.getHttpServer())
+        .get('/api/storage/private/not-a-real-token')
+        .expect(404);
+    });
   });
 
   it("owner B reports owner A's pet profile", async () => {
@@ -302,7 +526,7 @@ describe('Pet dating flow (e2e)', () => {
     const res = await request(app.getHttpServer())
       .get('/api/dating/discover')
       .set('Authorization', `Bearer ${ownerBAccessToken}`)
-      .query({ petId: petBId })
+      .query({ petId: petBId, mode: 'PLAYDATE' })
       .expect(200);
 
     const page = data<{ profiles: Array<{ petId: { _id: string } }> }>(res);
@@ -337,7 +561,7 @@ describe('Pet dating flow (e2e)', () => {
     const res = await request(app.getHttpServer())
       .get('/api/activity')
       .set('Authorization', `Bearer ${adminAccessToken}`)
-      .query({ limit: 50 })
+      .query({ limit: 100 })
       .expect(200);
 
     const page = data<{ activities: Array<{ action: string }> }>(res);
@@ -348,6 +572,9 @@ describe('Pet dating flow (e2e)', () => {
         'dating.report.created',
         'dating.report.status-changed',
         'admin.dating-profile.deactivated',
+        'dating.identity-verification.approved',
+        'dating.nid.shared',
+        'dating.nid.viewed',
       ]),
     );
   });

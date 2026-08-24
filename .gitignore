@@ -25,6 +25,10 @@ lerna-debug.log*
 # tracked here from earlier manual testing are unaffected by this rule.
 /uploads/*
 
+# Locally-generated private uploads (NID verification images, Phase 11) —
+# never served statically, never committed.
+/private-uploads/*
+
 # IDEs and editors
 /.idea
 .project

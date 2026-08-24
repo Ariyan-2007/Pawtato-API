@@ -445,6 +445,23 @@ export class PetsService {
     return ids.map((id) => id.toString());
   }
 
+  // Batched petId -> ownerId lookup — used by DatingService.discover()'s
+  // `verifiedOnly` filter to check candidate owners' identity-verification
+  // status without an N+1 round-trip per candidate.
+  async findOwnersForPets(petIds: string[]): Promise<Map<string, string>> {
+    if (petIds.length === 0) {
+      return new Map();
+    }
+
+    const pets = await this.petModel
+      .find({ _id: { $in: petIds.map((id) => new Types.ObjectId(id)) } })
+      .select('owner');
+
+    return new Map(
+      pets.map((pet) => [pet._id.toString(), pet.owner.toString()]),
+    );
+  }
+
   async topScannedPets() {
     return this.petModel
       .find()

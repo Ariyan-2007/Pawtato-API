@@ -338,5 +338,32 @@ describe('PetsService', () => {
       });
       expect(result).toEqual([id.toString()]);
     });
+
+    it('findOwnersForPets returns an empty map for an empty input without querying', async () => {
+      const result = await service.findOwnersForPets([]);
+
+      expect(petModel.find).not.toHaveBeenCalled();
+      expect(result.size).toBe(0);
+    });
+
+    it('findOwnersForPets maps each petId to its owner as strings', async () => {
+      const otherPetId = new Types.ObjectId();
+      const otherOwnerObjectId = new Types.ObjectId();
+      const select = jest.fn().mockResolvedValue([
+        { _id: new Types.ObjectId(petId), owner: new Types.ObjectId(ownerId) },
+        { _id: otherPetId, owner: otherOwnerObjectId },
+      ]);
+      petModel.find.mockReturnValue({ select });
+
+      const result = await service.findOwnersForPets([
+        petId,
+        otherPetId.toString(),
+      ]);
+
+      expect(result.get(petId)).toBe(ownerId);
+      expect(result.get(otherPetId.toString())).toBe(
+        otherOwnerObjectId.toString(),
+      );
+    });
   });
 });

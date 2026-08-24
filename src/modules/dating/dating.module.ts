@@ -3,7 +3,9 @@ import { MongooseModule } from '@nestjs/mongoose';
 
 import { DatingController } from './dating.controller';
 import { PetDatingProfileController } from './pet-dating-profile.controller';
+import { IdentityVerificationController } from './identity-verification.controller';
 import { DatingService } from './dating.service';
+import { IdentityVerificationService } from './identity-verification.service';
 
 import {
   PetDatingProfile,
@@ -16,6 +18,10 @@ import {
   DatingReport,
   DatingReportSchema,
 } from './schemas/dating-report.schema';
+import {
+  IdentityVerification,
+  IdentityVerificationSchema,
+} from './schemas/identity-verification.schema';
 
 import { PetsModule } from '../pets/pets.module';
 import { MedicalModule } from '../medical/medical.module';
@@ -30,6 +36,7 @@ import { ActivityModule } from '../activity/activity.module';
       { name: Match.name, schema: MatchSchema },
       { name: Message.name, schema: MessageSchema },
       { name: DatingReport.name, schema: DatingReportSchema },
+      { name: IdentityVerification.name, schema: IdentityVerificationSchema },
     ]),
 
     PetsModule,
@@ -38,10 +45,14 @@ import { ActivityModule } from '../activity/activity.module';
     ActivityModule,
   ],
 
-  controllers: [DatingController, PetDatingProfileController],
+  controllers: [
+    DatingController,
+    PetDatingProfileController,
+    IdentityVerificationController,
+  ],
 
-  providers: [DatingService],
+  providers: [DatingService, IdentityVerificationService],
 
-  exports: [DatingService],
+  exports: [DatingService, IdentityVerificationService],
 })
 export class DatingModule {}

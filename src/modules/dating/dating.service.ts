@@ -24,7 +24,7 @@ import { SwipeDto } from './dto/swipe.dto';
 import { CreateMessageDto } from './dto/create-message.dto';
 import { CreateDatingReportDto } from './dto/create-dating-report.dto';
 import type { AdminDatingReportQueryDto } from '../admin/dto/admin-dating-report-query.dto';
-import { DatingPurpose } from '../../common/enums/dating-purpose.enum';
+import { DatingMode } from '../../common/enums/dating-mode.enum';
 import { SwipeAction } from '../../common/enums/swipe-action.enum';
 import { MatchStatus } from '../../common/enums/match-status.enum';
 import { DatingReportStatus } from '../../common/enums/dating-report-status.enum';
@@ -33,10 +33,13 @@ import { PetsService } from '../pets/pets.service';
 import { MedicalService } from '../medical/medical.service';
 import { VaccinationsService } from '../vaccinations/vaccinations.service';
 import { ActivityService } from '../activity/activity.service';
+import { IdentityVerificationService } from './identity-verification.service';
 
 // Only cats and dogs may opt into dating — Pet.species is a free-text field
 // platform-wide (no enum enforced there), so this allow-list is local to
-// this module rather than a change to the core Pet schema.
+// this module rather than a change to the core Pet schema. Applies
+// regardless of mode — PLAYDATE being "universal" means "any species pair
+// among eligible species," not literally any species.
 const DATABLE_SPECIES = ['cat', 'dog'];
 
 // `pet.owner` is a plain ObjectId when unpopulated but a full document when
@@ -48,10 +51,6 @@ function extractOwnerId(owner: unknown): string {
   }
 
   return String(owner);
-}
-
-function purposesCompatible(a: DatingPurpose, b: DatingPurpose): boolean {
-  return a === DatingPurpose.BOTH || b === DatingPurpose.BOTH || a === b;
 }
 
 // Stored in a fixed order (lower hex string first) so a lookup or a unique
@@ -81,6 +80,7 @@ export class DatingService {
     private readonly medicalService: MedicalService,
     private readonly vaccinationsService: VaccinationsService,
     private readonly activityService: ActivityService,
+    private readonly identityVerificationService: IdentityVerificationService,
   ) {}
 
   private assertDatableSpecies(species: string) {
@@ -89,6 +89,36 @@ export class DatingService {
         'Dating is only available for cats and dogs',
       );
     }
+  }
+
+  // Computed live from real records, never stored on the profile itself —
+  // only ever called when the profile's own owner has opted into
+  // `shareHealthSummary` (see discover()/getProfile()). No spay/neuter
+  // field exists anywhere in this codebase's Pet schema, so this reports
+  // only what's actually derivable: vaccination currency and record counts.
+  private async buildMedicalSummary(petId: string) {
+    const [medicalRecords, vaccinations] = await Promise.all([
+      this.medicalService.findAllByPet(petId),
+      this.vaccinationsService.findAllByPet(petId),
+    ]);
+
+    const now = new Date();
+    const vaccinationsUpToDate =
+      vaccinations.length > 0 &&
+      vaccinations.every((v) => v.nextDueDate >= now);
+
+    const lastVaccinationDate = vaccinations.reduce<Date | null>(
+      (latest, v) =>
+        !latest || v.administeredDate > latest ? v.administeredDate : latest,
+      null,
+    );
+
+    return {
+      medicalRecordCount: medicalRecords.length,
+      vaccinationCount: vaccinations.length,
+      vaccinationsUpToDate,
+      lastVaccinationDate,
+    };
   }
 
   async createProfile(
@@ -109,11 +139,14 @@ export class DatingService {
 
     return this.profileModel.create({
       petId: pet._id,
-      purpose: dto.purpose,
+      modes: dto.modes,
       bio: dto.bio,
       temperamentTags: dto.temperamentTags ?? [],
-      photos: dto.photos ?? [],
+      likes: dto.likes ?? [],
+      dislikes: dto.dislikes ?? [],
+      photos: dto.photos,
       approxLocation: dto.approxLocation,
+      shareHealthSummary: dto.shareHealthSummary ?? false,
     });
   }
 
@@ -129,13 +162,24 @@ export class DatingService {
       throw new NotFoundException('Dating profile not found');
     }
 
-    if (dto.purpose !== undefined) profile.purpose = dto.purpose;
+    if (dto.modes !== undefined) {
+      if (dto.modes.length === 0) {
+        throw new BadRequestException(
+          'At least one dating mode must stay enabled',
+        );
+      }
+      profile.modes = dto.modes;
+    }
     if (dto.bio !== undefined) profile.bio = dto.bio;
     if (dto.temperamentTags !== undefined)
       profile.temperamentTags = dto.temperamentTags;
+    if (dto.likes !== undefined) profile.likes = dto.likes;
+    if (dto.dislikes !== undefined) profile.dislikes = dto.dislikes;
     if (dto.photos !== undefined) profile.photos = dto.photos;
     if (dto.approxLocation !== undefined)
       profile.approxLocation = dto.approxLocation;
+    if (dto.shareHealthSummary !== undefined)
+      profile.shareHealthSummary = dto.shareHealthSummary;
     if (dto.isActive !== undefined) profile.isActive = dto.isActive;
 
     await profile.save();
@@ -156,9 +200,9 @@ export class DatingService {
       throw new NotFoundException('Dating profile not found');
     }
 
-    if (profile.purpose === DatingPurpose.PLAYDATE) {
+    if (!profile.modes.includes(DatingMode.BREEDING)) {
       throw new BadRequestException(
-        'Health verification only applies to BREEDING or BOTH profiles',
+        'Health verification only applies to profiles with BREEDING enabled',
       );
     }
 
@@ -179,8 +223,44 @@ export class DatingService {
     return profile;
   }
 
+  // A pet's own full dating profile — used for "View full profile" and the
+  // Matched Profile Detail screen. Viewable by anyone while active; the
+  // owner can also view it while paused (isActive: false).
+  async getProfile(viewerId: string, petId: string) {
+    const profile = await this.profileModel
+      .findOne({ petId: new Types.ObjectId(petId) })
+      .populate('petId', 'name species breed profileImage');
+
+    if (!profile) {
+      throw new NotFoundException('Dating profile not found');
+    }
+
+    const ownerMap = await this.petsService.findOwnersForPets([petId]);
+    const ownerId = ownerMap.get(petId);
+    const isOwner = ownerId === viewerId;
+
+    if (!profile.isActive && !isOwner) {
+      throw new NotFoundException('Dating profile not found');
+    }
+
+    const [ownerVerified, medicalSummary] = await Promise.all([
+      ownerId
+        ? this.identityVerificationService.isApproved(ownerId)
+        : Promise.resolve(false),
+      profile.shareHealthSummary
+        ? this.buildMedicalSummary(petId)
+        : Promise.resolve(undefined),
+    ]);
+
+    return {
+      ...profile.toObject(),
+      ownerVerified,
+      ...(medicalSummary ? { medicalSummary } : {}),
+    };
+  }
+
   async discover(ownerId: string, query: DiscoverQueryDto) {
-    const { petId, page, limit } = query;
+    const { petId, mode, verifiedOnly, page, limit } = query;
     const pet = await this.petsService.findOwnedPet(ownerId, petId);
     const profile = await this.profileModel.findOne({ petId: pet._id });
 
@@ -196,15 +276,24 @@ export class DatingService {
       );
     }
 
-    const compatiblePurposes =
-      profile.purpose === DatingPurpose.BOTH
-        ? [DatingPurpose.PLAYDATE, DatingPurpose.BREEDING, DatingPurpose.BOTH]
-        : [profile.purpose, DatingPurpose.BOTH];
+    if (!profile.modes.includes(mode)) {
+      throw new BadRequestException(
+        `Enable ${mode} on this pet's dating profile before discovering in that mode`,
+      );
+    }
 
-    const [ownPetIds, swipedPetIds, sameSpeciesPetIds] = await Promise.all([
+    if (
+      verifiedOnly &&
+      !(await this.identityVerificationService.isApproved(ownerId))
+    ) {
+      throw new BadRequestException(
+        'Verify your identity to use the verified-only filter',
+      );
+    }
+
+    const [ownPetIds, swipedPetIds] = await Promise.all([
       this.petsService.findIdsForOwner(ownerId),
-      this.swipeModel.distinct('toPetId', { fromPetId: pet._id }),
-      this.petsService.findIdsBySpecies(pet.species),
+      this.swipeModel.distinct('toPetId', { fromPetId: pet._id, mode }),
     ]);
 
     const excludeIds = new Set<string>([
@@ -212,15 +301,48 @@ export class DatingService {
       ...swipedPetIds.map((id) => id.toString()),
     ]);
 
-    const candidateIds = sameSpeciesPetIds
-      .filter((id) => !excludeIds.has(id))
-      .map((id) => new Types.ObjectId(id));
-
-    const filter = {
-      petId: { $in: candidateIds },
-      purpose: { $in: compatiblePurposes },
+    const profileFilter: Record<string, unknown> = {
+      modes: mode,
       isActive: true,
     };
+
+    // BREEDING is species-restricted; PLAYDATE is universal — the profile
+    // filter alone (modes + isActive) is enough there, since species
+    // eligibility was already enforced once at profile-creation time.
+    if (mode === DatingMode.BREEDING) {
+      const sameSpeciesPetIds = await this.petsService.findIdsBySpecies(
+        pet.species,
+      );
+      const eligible = sameSpeciesPetIds.filter((id) => !excludeIds.has(id));
+      profileFilter.petId = {
+        $in: eligible.map((id) => new Types.ObjectId(id)),
+      };
+    } else {
+      profileFilter.petId = {
+        $nin: [...excludeIds].map((id) => new Types.ObjectId(id)),
+      };
+    }
+
+    let candidatePetIds = await this.profileModel.distinct(
+      'petId',
+      profileFilter,
+    );
+
+    if (verifiedOnly) {
+      const ownerMap = await this.petsService.findOwnersForPets(
+        candidatePetIds.map((id) => id.toString()),
+      );
+      const approvedOwners =
+        await this.identityVerificationService.getApprovedUserIds([
+          ...new Set(ownerMap.values()),
+        ]);
+
+      candidatePetIds = candidatePetIds.filter((id) =>
+        approvedOwners.has(ownerMap.get(id.toString()) ?? ''),
+      );
+    }
+
+    const filter = { petId: { $in: candidatePetIds } };
 
     const total = await this.profileModel.countDocuments(filter);
 
@@ -231,8 +353,37 @@ export class DatingService {
       .skip((page - 1) * limit)
       .limit(limit);
 
+    const pageOwnerMap = await this.petsService.findOwnersForPets(
+      profiles.map((p) =>
+        (p.petId as unknown as { _id: Types.ObjectId })._id.toString(),
+      ),
+    );
+    const approvedOnPage =
+      await this.identityVerificationService.getApprovedUserIds([
+        ...new Set(pageOwnerMap.values()),
+      ]);
+
+    const enriched = await Promise.all(
+      profiles.map(async (p) => {
+        const candidatePetId = (
+          p.petId as unknown as { _id: Types.ObjectId }
+        )._id.toString();
+        const ownerId = pageOwnerMap.get(candidatePetId);
+
+        const medicalSummary = p.shareHealthSummary
+          ? await this.buildMedicalSummary(candidatePetId)
+          : undefined;
+
+        return {
+          ...p.toObject(),
+          ownerVerified: ownerId ? approvedOnPage.has(ownerId) : false,
+          ...(medicalSummary ? { medicalSummary } : {}),
+        };
+      }),
+    );
+
     return {
-      profiles,
+      profiles: enriched,
       pagination: {
         total,
         page,
@@ -269,18 +420,28 @@ export class DatingService {
       throw new BadRequestException('This pet is not available for matching');
     }
 
-    if (
-      fromPet.species.trim().toLowerCase() !==
-      toPet.species.trim().toLowerCase()
-    ) {
+    if (!fromProfile.modes.includes(dto.mode)) {
       throw new BadRequestException(
-        'Pets can only be matched with the same species',
+        `Enable ${dto.mode} on this pet's dating profile before swiping in that mode`,
       );
     }
 
-    if (!purposesCompatible(fromProfile.purpose, toProfile.purpose)) {
+    if (!toProfile.modes.includes(dto.mode)) {
       throw new BadRequestException(
-        "These pets' dating purposes are not compatible",
+        `This pet is not available for ${dto.mode} matching`,
+      );
+    }
+
+    // BREEDING is species-restricted; PLAYDATE is universal — mirrors
+    // discover()'s pool rule exactly, re-checked here since a client is
+    // never trusted to have honored discover()'s filtering.
+    if (
+      dto.mode === DatingMode.BREEDING &&
+      fromPet.species.trim().toLowerCase() !==
+        toPet.species.trim().toLowerCase()
+    ) {
+      throw new BadRequestException(
+        'BREEDING matches must be the same species',
       );
     }
 
@@ -291,10 +452,13 @@ export class DatingService {
         fromPetId: fromPet._id,
         toPetId: toPet._id,
         action: dto.action,
+        mode: dto.mode,
       });
     } catch (error) {
       if (isDuplicateKeyError(error)) {
-        throw new BadRequestException('You already swiped on this pet');
+        throw new BadRequestException(
+          'You already swiped on this pet in this mode',
+        );
       }
 
       throw error;
@@ -308,6 +472,7 @@ export class DatingService {
       fromPetId: toPet._id,
       toPetId: fromPet._id,
       action: SwipeAction.LIKE,
+      mode: dto.mode,
     });
 
     if (!reciprocal) {
@@ -346,7 +511,7 @@ export class DatingService {
       (id) => new Types.ObjectId(id),
     );
 
-    return this.matchModel
+    const matches = await this.matchModel
       .find({
         status: MatchStatus.ACTIVE,
         $or: [{ petAId: { $in: ownPetIds } }, { petBId: { $in: ownPetIds } }],
@@ -354,6 +519,35 @@ export class DatingService {
       .populate('petAId', 'name species breed profileImage')
       .populate('petBId', 'name species breed profileImage')
       .sort({ matchedAt: -1 });
+
+    // `mode` isn't stored on Match itself (see PAWTATO_ROADMAP.md Phase 11)
+    // — reconstructed from the originating reciprocal-LIKE Swipe pair for
+    // display purposes (e.g. the frontend's Matches List mode icon).
+    return Promise.all(
+      matches.map(async (match) => {
+        const petA = match.petAId as unknown as { _id: Types.ObjectId };
+        const petB = match.petBId as unknown as { _id: Types.ObjectId };
+
+        const originatingSwipe = await this.swipeModel
+          .findOne({
+            $or: [
+              {
+                fromPetId: petA._id,
+                toPetId: petB._id,
+                action: SwipeAction.LIKE,
+              },
+              {
+                fromPetId: petB._id,
+                toPetId: petA._id,
+                action: SwipeAction.LIKE,
+              },
+            ],
+          })
+          .sort({ createdAt: 1 });
+
+        return { ...match.toObject(), mode: originatingSwipe?.mode ?? null };
+      }),
+    );
   }
 
   private async getMatchOrThrow(matchId: string) {
@@ -415,6 +609,84 @@ export class DatingService {
     await match.save();
 
     return { message: 'Unmatched successfully' };
+  }
+
+  // Explicit per-match consent (decided 2026-08-25 — see PAWTATO_ROADMAP.md
+  // Phase 11): sharing is per-direction and scoped to this one match only.
+  // Requires the caller to be APPROVED (they must have an NID on file to
+  // share it at all).
+  async shareNid(ownerId: string, matchId: string) {
+    const match = await this.getMatchOrThrow(matchId);
+    await this.assertOwnsSideOfMatch(ownerId, match);
+
+    if (!(await this.identityVerificationService.isApproved(ownerId))) {
+      throw new BadRequestException(
+        'Verify your identity before sharing it in a match',
+      );
+    }
+
+    const userObjectId = new Types.ObjectId(ownerId);
+
+    if (!match.nidSharedBy.some((id) => id.equals(userObjectId))) {
+      match.nidSharedBy.push(userObjectId);
+      await match.save();
+    }
+
+    await this.activityService.log(ownerId, 'dating.nid.shared', matchId);
+
+    return { message: 'Your ID is now shared in this match.' };
+  }
+
+  // Returns the *other* party's signed NID URLs — only once they've shared
+  // (shareNid()) and are still currently APPROVED. The caller must also be
+  // APPROVED themselves (the "Identity Sharing" section doesn't exist for
+  // an ineligible match at all — see PAWTATO_FRONTEND_BLUEPRINT.md).
+  async getNidExchange(ownerId: string, matchId: string) {
+    const match = await this.getMatchOrThrow(matchId);
+    await this.assertOwnsSideOfMatch(ownerId, match);
+
+    if (!(await this.identityVerificationService.isApproved(ownerId))) {
+      throw new BadRequestException(
+        'You must be verified to view identity exchange in this match',
+      );
+    }
+
+    const [petA, petB] = await Promise.all([
+      this.petsService.findByIdAdmin(match.petAId.toString()),
+      this.petsService.findByIdAdmin(match.petBId.toString()),
+    ]);
+
+    const ownsA = petA && extractOwnerId(petA.owner) === ownerId;
+    const otherPet = ownsA ? petB : petA;
+
+    if (!otherPet) {
+      throw new NotFoundException('Match not found');
+    }
+
+    const otherOwnerId = extractOwnerId(otherPet.owner);
+
+    const hasShared = match.nidSharedBy.some(
+      (id) => id.toString() === otherOwnerId,
+    );
+
+    if (!hasShared) {
+      throw new BadRequestException(
+        'The other side has not shared their ID in this match yet',
+      );
+    }
+
+    if (!(await this.identityVerificationService.isApproved(otherOwnerId))) {
+      throw new BadRequestException('The other side is no longer verified');
+    }
+
+    const urls =
+      await this.identityVerificationService.getSignedNidUrls(otherOwnerId);
+
+    await this.activityService.log(ownerId, 'dating.nid.viewed', matchId, {
+      viewedOwnerId: otherOwnerId,
+    });
+
+    return urls;
   }
 
   async report(reporterId: string, dto: CreateDatingReportDto) {

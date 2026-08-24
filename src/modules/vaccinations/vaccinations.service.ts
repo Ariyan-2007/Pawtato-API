@@ -38,6 +38,15 @@ export class VaccinationsService {
       });
   }
 
+  // No ownership check — used by DatingService to build a dating profile's
+  // medicalSummary, which is only ever read when the pet's own owner has
+  // already opted into `shareHealthSummary`. Authorization lives at that
+  // call site, not here (mirrors PetsService.findByIdAdmin's "Admin"-style
+  // unrestricted read, just not admin-only in this case).
+  async findAllByPet(petId: string) {
+    return this.vaccinationModel.find({ pet: petId });
+  }
+
   async count(): Promise<number> {
     return this.vaccinationModel.countDocuments();
   }

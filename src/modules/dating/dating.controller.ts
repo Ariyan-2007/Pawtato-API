@@ -34,10 +34,33 @@ export class DatingController {
   constructor(private readonly datingService: DatingService) {}
 
   @ApiOperation({
-    summary: 'Discover candidate pets to swipe on',
+    summary: "Get a pet's full dating profile",
     description:
-      'Same species as the swiping pet, purpose-compatible, excludes the ' +
-      "caller's own pets and anything already swiped, active profiles only.",
+      'Used for "View full profile" (a discover candidate) and the Matched Profile Detail screen. ' +
+      'Viewable by anyone while the profile is active; the owner can also view it while paused.',
+  })
+  @ApiParam({ name: 'petId', description: 'Pet ID' })
+  @ApiResponse({ status: 200, description: 'The dating profile.' })
+  @ApiResponse({
+    status: 404,
+    description:
+      'No dating profile for this pet, or it is inactive and the caller does not own it.',
+  })
+  @Get('profiles/:petId')
+  getProfile(
+    @CurrentUser() user: JwtPayload,
+    @Param('petId', ParseMongoIdPipe) petId: string,
+  ) {
+    return this.datingService.getProfile(user.sub, petId);
+  }
+
+  @ApiOperation({
+    summary: 'Discover candidate pets to swipe on in a given mode',
+    description:
+      'BREEDING candidates are always the same species as the swiping pet; PLAYDATE candidates ' +
+      "are never species-restricted. Excludes the caller's own pets and anything already swiped " +
+      'in this mode, active + mode-enabled profiles only. `verifiedOnly` further restricts to ' +
+      "owners who are identity-verified, and requires the caller's own verification to be approved.",
   })
   @ApiResponse({
     status: 200,
@@ -45,7 +68,8 @@ export class DatingController {
   })
   @ApiResponse({
     status: 400,
-    description: 'The swiping pet has no active dating profile.',
+    description:
+      "The swiping pet has no active profile, doesn't have this mode enabled, or verifiedOnly was requested by an unverified caller.",
   })
   @Get('discover')
   discover(@CurrentUser() user: JwtPayload, @Query() query: DiscoverQueryDto) {
@@ -53,10 +77,11 @@ export class DatingController {
   }
 
   @ApiOperation({
-    summary: 'Swipe on another pet',
+    summary: 'Swipe on another pet within a given mode',
     description:
-      'A mutual LIKE immediately creates and returns a Match — no polling needed. ' +
-      'Species and purpose compatibility are enforced here too, not just in discover().',
+      'A mutual LIKE (in the same mode) immediately creates and returns a Match — no polling ' +
+      'needed. Mode-enabled status and (for BREEDING) species compatibility are enforced here ' +
+      'too, not just in discover().',
   })
   @ApiResponse({
     status: 201,
@@ -66,7 +91,7 @@ export class DatingController {
   @ApiResponse({
     status: 400,
     description:
-      'Already swiped on this pet, incompatible species/purpose, or an inactive profile.',
+      'Already swiped on this pet in this mode, mode not enabled on one side, BREEDING species mismatch, or an inactive profile.',
   })
   @Throttle({ swipe: { limit: 60, ttl: 60_000 } })
   @Post('swipe')
@@ -126,6 +151,61 @@ export class DatingController {
     @Param('matchId', ParseMongoIdPipe) matchId: string,
   ) {
     return this.datingService.unmatch(user.sub, matchId);
+  }
+
+  @ApiOperation({
+    summary: "Share the caller's identity (NID) within a specific match",
+    description:
+      'Explicit, per-match consent (not automatic on match) — requires the caller to be ' +
+      'identity-verified (APPROVED). Sharing is per-direction: this only ever affects what the ' +
+      'other side of this match can view, and only within this match.',
+  })
+  @ApiParam({ name: 'matchId', description: 'Match ID' })
+  @ApiResponse({ status: 201, description: 'Identity shared in this match.' })
+  @ApiResponse({
+    status: 400,
+    description: 'Caller is not identity-verified.',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Match not found, or the caller owns neither side.',
+  })
+  @Post('matches/:matchId/share-nid')
+  shareNid(
+    @CurrentUser() user: JwtPayload,
+    @Param('matchId', ParseMongoIdPipe) matchId: string,
+  ) {
+    return this.datingService.shareNid(user.sub, matchId);
+  }
+
+  @ApiOperation({
+    summary:
+      "View the other side's identity (NID), if they've shared it in this match",
+    description:
+      'Returns short-lived signed URLs, never a permanent link. Requires the caller to also be ' +
+      'identity-verified, and the other side to have both shared (share-nid) and still be ' +
+      'currently APPROVED. Every call is audit-logged (`dating.nid.viewed`).',
+  })
+  @ApiParam({ name: 'matchId', description: 'Match ID' })
+  @ApiResponse({
+    status: 200,
+    description: 'Short-lived signed URLs to the front/back NID images.',
+  })
+  @ApiResponse({
+    status: 400,
+    description:
+      "Caller isn't verified, or the other side hasn't shared / is no longer verified.",
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Match not found, or the caller owns neither side.',
+  })
+  @Get('matches/:matchId/nid')
+  getNidExchange(
+    @CurrentUser() user: JwtPayload,
+    @Param('matchId', ParseMongoIdPipe) matchId: string,
+  ) {
+    return this.datingService.getNidExchange(user.sub, matchId);
   }
 
   @ApiOperation({ summary: "Report a pet's dating profile" })

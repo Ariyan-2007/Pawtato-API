@@ -9,6 +9,7 @@ import { FoundReportsService } from '../found-reports/found-reports.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { ActivityService } from '../activity/activity.service';
 import { DatingService } from '../dating/dating.service';
+import { IdentityVerificationService } from '../dating/identity-verification.service';
 import { DashboardStatsDto } from './dto/dashboard-stats.dto';
 import { AdminUserQueryDto } from './dto/admin-user-query.dto';
 import { UserRole } from '../../common/enums/user-role.enum';
@@ -17,6 +18,7 @@ import { AdminFoundReportQueryDto } from './dto/admin-found-report-query.dto';
 import { FoundReportStatus } from '../../common/enums/found-report-status.enum';
 import type { AdminDatingReportQueryDto } from './dto/admin-dating-report-query.dto';
 import { DatingReportStatus } from '../../common/enums/dating-report-status.enum';
+import type { AdminIdentityVerificationQueryDto } from './dto/admin-identity-verification-query.dto';
 
 @Injectable()
 export class AdminService {
@@ -30,6 +32,7 @@ export class AdminService {
     private readonly foundReportsService: FoundReportsService,
     private readonly notificationsService: NotificationsService,
     private readonly datingService: DatingService,
+    private readonly identityVerificationService: IdentityVerificationService,
     private readonly activityService: ActivityService,
   ) {}
 
@@ -88,8 +91,11 @@ export class AdminService {
   // everything that in turn references those pets/tags (medical records,
   // vaccinations, scan history, found reports, in-app notifications, dating
   // profiles/swipes/matches/messages), plus every dating report this user
-  // filed against someone else's pet, plus every stored file along the way
-  // (avatar, pet photos, tag QR images, found-report photos). Deliberately
+  // filed against someone else's pet, plus their identity-verification
+  // record and its private NID files (Phase 11 — user-scoped, not
+  // pet-scoped, so this doesn't fall out of the petIds-based cascade
+  // above), plus every stored file along the way (avatar, pet photos, tag
+  // QR images, found-report photos). Deliberately
   // not wrapped in a Mongo transaction —
   // this project's MongoDB isn't running as a replica set (see
   // PAWTATO_ROADMAP.md's Phase 8 notes), which transactions require.
@@ -125,6 +131,7 @@ export class AdminService {
 
     await this.datingService.deleteAllForPets(petIds);
     await this.datingService.deleteReportsByReporter(id);
+    await this.identityVerificationService.deleteForUser(id);
 
     await this.tagsService.deleteAllForOwner(id);
     await this.petsService.deleteAllForOwner(id);
@@ -225,5 +232,25 @@ export class AdminService {
 
   async deactivateDatingProfile(actorId: string, petId: string) {
     return this.datingService.adminDeactivateProfile(actorId, petId);
+  }
+
+  async identityVerifications(query: AdminIdentityVerificationQueryDto) {
+    return this.identityVerificationService.adminList(query);
+  }
+
+  async identityVerificationImages(actorId: string, id: string) {
+    return this.identityVerificationService.adminGetSignedImages(actorId, id);
+  }
+
+  async approveIdentityVerification(actorId: string, id: string) {
+    return this.identityVerificationService.adminApprove(actorId, id);
+  }
+
+  async rejectIdentityVerification(
+    actorId: string,
+    id: string,
+    reason: string,
+  ) {
+    return this.identityVerificationService.adminReject(actorId, id, reason);
   }
 }

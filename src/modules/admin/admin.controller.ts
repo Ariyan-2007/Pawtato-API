@@ -32,6 +32,8 @@ import { AdminFoundReportQueryDto } from './dto/admin-found-report-query.dto';
 import { UpdateFoundReportStatusDto } from './dto/update-found-report-status.dto';
 import { AdminDatingReportQueryDto } from './dto/admin-dating-report-query.dto';
 import { UpdateDatingReportStatusDto } from './dto/update-dating-report-status.dto';
+import { AdminIdentityVerificationQueryDto } from './dto/admin-identity-verification-query.dto';
+import { RejectIdentityVerificationDto } from './dto/reject-identity-verification.dto';
 import { DashboardStatsDto } from './dto/dashboard-stats.dto';
 import { DashboardAnalyticsDto } from './dto/dashboard-analytics.dto';
 
@@ -277,5 +279,87 @@ export class AdminController {
     petId: string,
   ) {
     return this.adminService.deactivateDatingProfile(user.sub, petId);
+  }
+
+  @ApiOperation({
+    summary:
+      'List identity (NID) verification submissions for review (admin only)',
+    description:
+      'Never includes the stored image keys/URLs — fetch those on demand per submission via ' +
+      'GET /admin/dating/verifications/{id}/images.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Paginated list of identity verification submissions.',
+  })
+  @Get('dating/verifications')
+  findAllIdentityVerifications(
+    @Query()
+    query: AdminIdentityVerificationQueryDto,
+  ) {
+    return this.adminService.identityVerifications(query);
+  }
+
+  @ApiOperation({
+    summary:
+      "Get a submission's NID images via short-lived signed URLs (admin only)",
+    description:
+      'On-demand only — opening this endpoint is audit-logged, same as the matched-party NID exchange.',
+  })
+  @ApiParam({ name: 'id', description: 'Identity verification ID' })
+  @ApiResponse({
+    status: 200,
+    description: 'Short-lived signed URLs to the front/back NID images.',
+  })
+  @ApiResponse({ status: 404, description: 'Identity verification not found.' })
+  @Get('dating/verifications/:id/images')
+  getIdentityVerificationImages(
+    @CurrentUser() user: JwtPayload,
+
+    @Param('id', ParseMongoIdPipe)
+    id: string,
+  ) {
+    return this.adminService.identityVerificationImages(user.sub, id);
+  }
+
+  @ApiOperation({
+    summary: 'Approve an identity verification submission (admin only)',
+  })
+  @ApiParam({ name: 'id', description: 'Identity verification ID' })
+  @ApiResponse({ status: 200, description: 'Verification approved.' })
+  @ApiResponse({ status: 404, description: 'Identity verification not found.' })
+  @Patch('dating/verifications/:id/approve')
+  approveIdentityVerification(
+    @CurrentUser() user: JwtPayload,
+
+    @Param('id', ParseMongoIdPipe)
+    id: string,
+  ) {
+    return this.adminService.approveIdentityVerification(user.sub, id);
+  }
+
+  @ApiOperation({
+    summary: 'Reject an identity verification submission (admin only)',
+    description:
+      'The reason is shown verbatim to the user on their status screen.',
+  })
+  @ApiParam({ name: 'id', description: 'Identity verification ID' })
+  @ApiResponse({ status: 200, description: 'Verification rejected.' })
+  @ApiResponse({ status: 404, description: 'Identity verification not found.' })
+  @Patch('dating/verifications/:id/reject')
+  rejectIdentityVerification(
+    @CurrentUser() user: JwtPayload,
+
+    @Param('id', ParseMongoIdPipe)
+    id: string,
+
+    @Body()
+    dto: RejectIdentityVerificationDto,
+  ) {
+    return this.adminService.rejectIdentityVerification(
+      user.sub,
+      id,
+      dto.reason,
+    );
   }
 }
