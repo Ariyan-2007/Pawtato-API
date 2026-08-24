@@ -9,6 +9,7 @@ import {
 } from '@nestjs/swagger';
 
 import { ScansService } from './scans.service';
+import { ParseMongoIdPipe } from '../../common/pipes/parse-mongo-id.pipe';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import type { JwtPayload } from '../auth/interfaces/jwt-payload.interface';
@@ -34,7 +35,7 @@ export class ScansController {
   findAll(
     @CurrentUser() user: JwtPayload,
 
-    @Param('petId')
+    @Param('petId', ParseMongoIdPipe)
     petId: string,
   ) {
     return this.scansService.findForOwnedPet(user.sub, petId);

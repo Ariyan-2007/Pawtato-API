@@ -11,6 +11,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import type { JwtPayload } from '../auth/interfaces/jwt-payload.interface';
 import { MedicalService } from './medical.service';
+import { ParseMongoIdPipe } from '../../common/pipes/parse-mongo-id.pipe';
 import { CreateMedicalRecordDto } from './dto/create-medical-record.dto';
 
 @ApiTags('Medical Records')
@@ -31,7 +32,7 @@ export class MedicalController {
   create(
     @CurrentUser() user: JwtPayload,
 
-    @Param('petId')
+    @Param('petId', ParseMongoIdPipe)
     petId: string,
 
     @Body()
@@ -51,7 +52,7 @@ export class MedicalController {
   findAll(
     @CurrentUser() user: JwtPayload,
 
-    @Param('petId')
+    @Param('petId', ParseMongoIdPipe)
     petId: string,
   ) {
     return this.medicalService.findAll(user.sub, petId);

@@ -1,4 +1,4 @@
-import { IsNotEmpty, IsString } from 'class-validator';
+import { IsMongoId, IsNotEmpty, IsString, MaxLength } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 
 export class AssignTagDto {
@@ -9,12 +9,12 @@ export class AssignTagDto {
   })
   @IsString()
   @IsNotEmpty()
+  @MaxLength(32)
   publicCode!: string;
 
   @ApiProperty({
     description: 'ID of the pet (owned by the caller) to assign this tag to.',
   })
-  @IsString()
-  @IsNotEmpty()
+  @IsMongoId()
   petId!: string;
 }

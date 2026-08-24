@@ -18,6 +18,7 @@ import {
 } from '@nestjs/swagger';
 
 import { NotificationsService } from './notifications.service';
+import { ParseMongoIdPipe } from '../../common/pipes/parse-mongo-id.pipe';
 import { NotificationQueryDto } from './dto/notification-query.dto';
 import { BulkDeleteNotificationsDto } from './dto/bulk-delete-notifications.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -69,7 +70,7 @@ export class NotificationsController {
   markRead(
     @CurrentUser() user: JwtPayload,
 
-    @Param('id')
+    @Param('id', ParseMongoIdPipe)
     notificationId: string,
   ) {
     return this.notificationsService.markRead(user.sub, notificationId);
@@ -102,7 +103,7 @@ export class NotificationsController {
   deleteOne(
     @CurrentUser() user: JwtPayload,
 
-    @Param('id')
+    @Param('id', ParseMongoIdPipe)
     notificationId: string,
   ) {
     return this.notificationsService.delete(user.sub, notificationId);

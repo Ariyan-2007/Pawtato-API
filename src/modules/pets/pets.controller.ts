@@ -26,6 +26,7 @@ import {
 import { PetsService } from './pets.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { ParseMongoIdPipe } from '../../common/pipes/parse-mongo-id.pipe';
 import type { JwtPayload } from '../auth/interfaces/jwt-payload.interface';
 import { CreatePetDto } from './dto/create-pet.dto';
 import { UpdatePetDto } from './dto/update-pet.dto';
@@ -88,7 +89,7 @@ export class PetsController {
   findOne(
     @CurrentUser() user: JwtPayload,
 
-    @Param('id')
+    @Param('id', ParseMongoIdPipe)
     petId: string,
   ) {
     return this.petsService.findOne(user.sub, petId);
@@ -105,7 +106,7 @@ export class PetsController {
   update(
     @CurrentUser() user: JwtPayload,
 
-    @Param('id')
+    @Param('id', ParseMongoIdPipe)
     petId: string,
 
     @Body()
@@ -141,7 +142,7 @@ export class PetsController {
   async uploadPhoto(
     @CurrentUser() user: JwtPayload,
 
-    @Param('id')
+    @Param('id', ParseMongoIdPipe)
     petId: string,
 
     @UploadedFile()
@@ -177,7 +178,7 @@ export class PetsController {
   removePhoto(
     @CurrentUser() user: JwtPayload,
 
-    @Param('id')
+    @Param('id', ParseMongoIdPipe)
     petId: string,
   ) {
     return this.petsService.removePhoto(user.sub, petId);
@@ -194,7 +195,7 @@ export class PetsController {
   remove(
     @CurrentUser() user: JwtPayload,
 
-    @Param('id')
+    @Param('id', ParseMongoIdPipe)
     petId: string,
   ) {
     return this.petsService.remove(user.sub, petId);
@@ -211,7 +212,7 @@ export class PetsController {
   reportLost(
     @CurrentUser() user: JwtPayload,
 
-    @Param('id')
+    @Param('id', ParseMongoIdPipe)
     petId: string,
 
     @Body()
@@ -231,7 +232,7 @@ export class PetsController {
   reportFound(
     @CurrentUser() user: JwtPayload,
 
-    @Param('id')
+    @Param('id', ParseMongoIdPipe)
     petId: string,
   ) {
     return this.petsService.reportFound(user.sub, petId);

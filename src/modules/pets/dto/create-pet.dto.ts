@@ -4,32 +4,39 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  Max,
   MaxLength,
+  Min,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class CreatePetDto {
   @ApiProperty({ example: 'Milo' })
   @IsString()
+  @MaxLength(100)
   name!: string;
 
   @ApiProperty({ example: 'Cat', description: 'e.g. Cat, Dog' })
   @IsString()
+  @MaxLength(100)
   species!: string;
 
   @ApiPropertyOptional({ example: 'Persian' })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   breed?: string;
 
   @ApiPropertyOptional({ example: 'Male' })
   @IsOptional()
   @IsString()
+  @MaxLength(50)
   gender?: string;
 
   @ApiPropertyOptional({ example: 'White' })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   color?: string;
 
   @ApiPropertyOptional({ example: '2022-05-01' })
@@ -40,6 +47,8 @@ export class CreatePetDto {
   @ApiPropertyOptional({ example: 4.2, description: 'Weight in kilograms' })
   @IsOptional()
   @IsNumber()
+  @Min(0)
+  @Max(500)
   weight?: number;
 
   @ApiPropertyOptional({
