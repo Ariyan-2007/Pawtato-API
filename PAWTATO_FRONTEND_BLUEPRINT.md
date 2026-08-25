@@ -21,17 +21,19 @@ This file was referenced by name back when Phase 10 was scoped (see `PAWTATO_ROA
 | Dating | Dating Profile Editor | Planned — Phase 11 (extends a Phase 10 layout) |
 | Dating | Identity Verification — Submit | Planned — Phase 11 |
 | Dating | Identity Verification — Status | Planned — Phase 11 |
-| Dating | Discover / Swipe | Planned — Phase 11 (extends a Phase 10 layout) |
+| Dating | Discover / Swipe | Planned — Phase 11, gender copy updated Phase 12 |
 | Dating | Match Celebration | Planned — Phase 10 layout, unchanged |
-| Dating | Matches List | Planned — Phase 10 layout, unchanged |
-| Dating | Chat Thread | Planned — Phase 10 layout, unchanged |
+| Dating | Matches List | Planned — Phase 10 layout; archived rows added Phase 12 |
+| Dating | Chat Thread | Planned — Phase 10 layout; **reworked Phase 12** for real-time + archive/delete/report |
 | Dating | Matched Profile Detail (+ NID exchange) | Planned — Phase 11 |
-| Dating | Report Profile (modal) | Planned — Phase 10 layout, unchanged |
+| Dating | Report Profile / Report Chat (modal) | Planned — Phase 10 layout; **extended Phase 12** for chat context |
 | Admin | Verification Review Queue | Planned — Phase 11 |
-| Admin | Dating Reports Queue | Planned — Phase 10 layout, unchanged |
-| Other | Lost & Found, Auth, Pet CRUD, Admin dashboard | Not designed here — see note below |
+| Admin | Dating Reports Queue | Planned — Phase 10 layout; **extended Phase 12** for chat-context reports |
+| Other | Lost & Found, Auth, Pet CRUD, Admin dashboard | Not designed here — see note below (Pet Create/Edit gained a mandatory Gender field in Phase 12) |
 
 **Other modules note:** Lost & Found, auth/onboarding, pet profile CRUD, QR/tag management, and the general admin dashboard all have working, e2e-verified API flows (`PAWTATO_FRONTEND_FLOWS.md` Flows 1–2), but no page-layout plan exists yet — out of scope for this pass, which was requested specifically to cover the dating module rework. Add a section here when those get designed.
+
+**One cross-cutting exception, called out here even though Pet Create/Edit itself isn't designed in this file (Phase 12):** `POST /pets` and `PATCH /pets/:id` now require a `gender` field (`MALE` or `FEMALE`) — this is no longer optional, platform-wide, not just for pets that opt into dating. Whatever the Pet Create/Edit screen ends up looking like, it **must** include a mandatory gender selector (e.g. a required two-option segmented control, no default pre-selected) before that form can submit — the API will reject the request with a `400` otherwise. This isn't a dating-specific field cosmetically, but it exists *because of* dating: Breeding-mode matching is strictly opposite-gender (see the Discover screen below), which is only enforceable if every pet has a real sex on file. Flag this to whoever builds the Pet Create/Edit screen even though its full layout isn't planned here yet.
 
 ---
 
@@ -273,8 +275,9 @@ Filter sheet (⚙️, slides up):
 - Header shows the active mode as a static label (not a switcher) — changing mode goes back to the Dating Hub, keeping "which pet + which mode" as one deliberate choice rather than something to fumble mid-swipe.
 - "✓ Verified owner" badge appears on the card only when the candidate's owner is `APPROVED` — visible to everyone, not just other verified users, since the badge itself is the signal that makes verified-only filtering worth using.
 - In **Breeding** mode, the species is implied (all candidates share the swiper's species) so the card leads with breed instead; in **Play Date** mode, species is shown prominently on the card since candidates are mixed.
+- **Breeding mode is strictly opposite-gender (Phase 12), enforced server-side, not just filtered in the UI.** Every candidate `GET /dating/discover?mode=BREEDING` returns is guaranteed to be the opposite gender of the swiping pet — the card should show the candidate's gender (e.g. a small ♂/♀ icon or "Male"/"Female" label next to the breed) so the owner understands why the pool looks the way it does, not because the client needs to filter anything itself. A same-gender pet will never appear here, and a direct `POST /dating/swipe` against one in `BREEDING` mode is rejected `400` regardless — this is a display/trust concern for the frontend, not a validation duty.
 - "Verified profiles only" filter checkbox is disabled with a tooltip ("Verify your own profile to use this") when the current user isn't `APPROVED` yet — matches the backend's `400` on that combination, so the UI never lets a user hit that error.
-- A mutual like triggers the Match Celebration screen immediately (per Phase 10's existing swipe-response contract) — no polling.
+- A mutual like triggers the Match Celebration screen immediately for the swiper (per Phase 10's existing swipe-response contract) — no polling. **Phase 12 adds a second, independent channel for the other side**: if they have an open Socket.IO connection at the moment the match completes, they receive a live `matchCreated` event (see the new Real-Time Chat section below) even if they're nowhere near the Discover screen. Wire both — the swipe response for the swiper, the socket event for the other side.
 
 ---
 
@@ -302,7 +305,7 @@ Unchanged from the Phase 10 layout (full-screen modal on a mutual like):
 
 ### 7. Matches List
 
-Unchanged from the Phase 10 layout:
+Base layout unchanged from Phase 10; **Phase 12 adds an archived state** — `GET /dating/matches` now returns both `ACTIVE` and `UNMATCHED` matches (a match no longer disappears the moment either side unmatches), so the list needs to render both:
 
 ```
 ┌─────────────────────────────────────┐
@@ -310,32 +313,72 @@ Unchanged from the Phase 10 layout:
 ├─────────────────────────────────────┤
 │  🐾 Bella          "Hey! Rex is..."  │
 │  🧬 Max            Matched today     │
-│  🐾 Luna           "See you Sat?"    │
+│  🐾 Luna  🔒        Archived         │
 └─────────────────────────────────────┘
 ```
 
-Small icon per row indicates which mode produced the match (🐾 Play Date / 🧬 Breeding), sourced from the `Swipe.mode` field Phase 11 adds for exactly this traceability purpose.
+**Notes:**
+- Small icon per row indicates which mode produced the match (🐾 Play Date / 🧬 Breeding), sourced from the `mode` field `listMatches()` reconstructs from the originating reciprocal-LIKE swipe pair (Phase 11).
+- A row where `status === 'UNMATCHED'` shows a 🔒 (or similar "archived/ended" glyph) and its preview text is replaced with "Archived" rather than the last message snippet — tapping it still opens the Chat Thread, just in its read-only archived state (see below), never removed from the list on its own. It only disappears from *this user's* list once they've explicitly deleted it (`POST /dating/matches/{id}/delete` — see the Chat Thread section) — the other side, if they haven't also deleted it, keeps seeing it.
+- Live updates: a socket-connected client should splice a new row in (or bump an existing one to the top with an unread indicator) on a `newMessage` event, and flip a row to the archived state on `matchUnmatched` — both delivered to the user's personal room, so this works even while the Matches List itself is the active screen, not just the Chat Thread. See the Real-Time Chat section below for the full event contract.
 
 ---
 
 ### 8. Chat Thread
 
-Unchanged from the Phase 10 layout — plain message list + input, no new requirements from this phase:
+**Reworked in Phase 12** — real-time delivery over a Socket.IO connection (not just the REST history load), an archived/read-only state once either side unmatches, and a header overflow menu for Delete Conversation / Report Chat. Full connection/event details are in the new **Real-Time Chat (Socket.IO)** section further down this file — this is the screen-level layout and behavior built on top of that contract.
 
 ```
 ┌─────────────────────────────────────┐
-│  ← Bella & Rex          [i] Details  │
+│  ← Bella & Rex        [i]      [⋮]   │
 ├─────────────────────────────────────┤
 │                    Hi! Rex is cute 🐕 │
 │  Thanks! Bella's gorgeous            │
 │                    Want to meet up?  │
-│                                       │
+│                          ⌨ typing…    │
 ├─────────────────────────────────────┤
 │  [ Type a message...        ] [Send] │
 └─────────────────────────────────────┘
 ```
 
-"[i] Details" opens the Matched Profile Detail screen below.
+Overflow menu (`[⋮]`, opens a small action sheet):
+```
+┌─────────────────────────────┐
+│  [ Unmatch ]                 │
+│  [ Report this chat ]        │
+│  [ Delete conversation ]     │
+│      (disabled until         │
+│       unmatched)              │
+└─────────────────────────────┘
+```
+
+Archived state (once either side has unmatched):
+```
+┌─────────────────────────────────────┐
+│  ← Bella & Rex (Archived)      [⋮]   │
+├─────────────────────────────────────┤
+│                    Hi! Rex is cute 🐕 │
+│  Thanks! Bella's gorgeous            │
+│                    Want to meet up?  │
+│                                       │
+│  🔒 This match ended — the           │
+│     conversation is archived,        │
+│     read-only.                       │
+├─────────────────────────────────────┤
+│  [ This match has ended — you can't  │
+│    send new messages ]  (disabled)   │
+└─────────────────────────────────────┘
+```
+
+**Notes:**
+- **On screen open**: fetch history via `GET /dating/matches/{id}/messages` (unchanged REST call, still the source of truth for anything sent before this screen was open), then connect/join the match's Socket.IO room (`emit('joinMatch', { matchId })`) for anything sent from here on. Don't rely on the socket alone for history — a client that was offline while a message was sent needs the REST fetch to catch up.
+- **Sending**: prefer `emit('sendMessage', { matchId, content })` over the socket while connected (lower latency, and it's the same server-side call as the REST endpoint — see the Real-Time Chat section), falling back to `POST /dating/matches/{id}/messages` if the socket is disconnected. Either path ends up broadcasting a `newMessage` event back to this same room, so don't also locally-append the message you just sent from the send-response *and* from the echoed socket event — pick one (the socket echo is the simpler choice, since it's the same code path REST-originated messages already need).
+- **Typing indicator**: `emit('typing', { matchId })` on each keystroke (debounced, e.g. every 2–3s while actively typing, not per keystroke), listen for the same event from the other side to show "⌨ typing…". This is fire-and-forget, never persisted.
+- **"[i]" (Details)** opens the Matched Profile Detail screen below — unchanged.
+- **"[⋮]" overflow menu** is new in Phase 12:
+  - **Unmatch** — `POST /dating/matches/{id}/unmatch`. Either side can do this at any time the match is still `ACTIVE`. Immediately flips this screen (and the other side's, live via `matchUnmatched`) into the archived state above — composer disabled, banner shown. Calling unmatch on an already-archived match is harmless (the backend treats it as a no-op, "Already unmatched"), so there's no need to hide the action once archived, though most UIs will just swap it for "Unmatched" (disabled) at that point.
+  - **Report this chat** — opens the Report modal (see screen 10 below) with `matchId` pre-attached, so admin reviewing the report can see this actual conversation, not just the other pet's profile in the abstract. Available regardless of archived state — a still-active conversation can be reported mid-chat.
+  - **Delete conversation** — `POST /dating/matches/{id}/delete`. **Disabled (greyed out, with a tooltip like "Unmatch first") until the match is archived** — the backend rejects this with a `400` on an `ACTIVE` match, by design: you can't delete a conversation out from under someone you're still matched with. This is a **per-side hide, not a real delete** — say so if the UI has room for a confirmation dialog ("This removes the conversation from your list. [Name] will still be able to see it unless they also delete it.") rather than implying the messages are destroyed, since they aren't (a filed report can still reference them). Once deleted, navigate back to the Matches List; this match no longer appears there for this user.
 
 ---
 
@@ -394,28 +437,38 @@ Once the other owner has tapped share, "Bella's owner's ID" replaces the hidden 
 - The other party's row shows a hidden-placeholder state until they've shared — never a "request to view" button, since this phase's design is opt-in-to-share, not opt-in-to-request.
 - Once shared, NID images load via short-lived signed URLs fetched only when that row is actually scrolled into view / tapped open, not eagerly with the rest of the profile — matches the backend's on-demand, audit-logged read path.
 - "Viewed just now — this view is logged" is deliberate, visible copy, not a hidden backend-only detail — both sides should know a view is recorded, which is itself part of why this exchange is meant to feel safe rather than covert.
+- **[ Unmatch ] / [ Report profile ] (Phase 12 note)**: these call the same `POST /dating/matches/{id}/unmatch` and report flow as the Chat Thread's overflow menu — there's only one Unmatch action in the product, reachable from two screens. The one real difference: a report filed from *here* has no `matchId` attached (it's a pure profile report, same as reporting from the Discover card's "View full profile"), while a report filed from the Chat Thread's "Report this chat" pre-attaches `matchId` so admin can see the conversation. If this screen ever grows its own "Report" entry point that's reached *from* an open chat, attach `matchId` there too rather than treating profile-report and chat-report as the same call with different context only on one screen.
 
 ---
 
-### 10. Report Profile (modal)
+### 10. Report Profile / Report Chat (modal)
 
-Unchanged from the Phase 10 layout:
+Base layout unchanged from Phase 10. **Phase 12 gives this same modal a second entry point** — "Report this chat" on the Chat Thread's overflow menu opens it with `matchId` pre-attached and the title adjusted, everything else (reason list, optional details, submit) identical:
 
 ```
-┌─────────────────────────────────────┐
-│  Report Bella's profile         ✕    │
-├─────────────────────────────────────┤
-│  Reason                              │
-│  ( ) Inappropriate photos            │
-│  ( ) Fake profile                    │
-│  ( ) Harassment                      │
-│  ( ) Other                            │
-│  ┌───────────────────────────────┐   │
-│  │ Add details (optional)         │   │
-│  └───────────────────────────────┘   │
-│  [ Submit report ]                    │
-└─────────────────────────────────────┘
+Reported from Discover / Matched Profile:      Reported from the Chat Thread:
+┌─────────────────────────────────────┐        ┌─────────────────────────────────────┐
+│  Report Bella's profile         ✕    │        │  Report this conversation        ✕   │
+├─────────────────────────────────────┤        ├─────────────────────────────────────┤
+│  Reason                              │        │  Reason                              │
+│  ( ) Inappropriate photos            │        │  ( ) Inappropriate photos            │
+│  ( ) Fake profile                    │        │  ( ) Fake profile                    │
+│  ( ) Harassment                      │        │  ( ) Harassment                      │
+│  ( ) Other                            │        │  ( ) Other                            │
+│  ┌───────────────────────────────┐   │        │  ┌───────────────────────────────┐   │
+│  │ Add details (optional)         │   │        │  │ Add details (optional)         │   │
+│  └───────────────────────────────┘   │        │  └───────────────────────────────┘   │
+│  [ Submit report ]                    │        │  ℹ Our team will be able to see     │
+└─────────────────────────────────────┘        │    this conversation while           │
+                                                 │    reviewing your report.            │
+                                                 │  [ Submit report ]                    │
+                                                 └─────────────────────────────────────┘
 ```
+
+**Notes:**
+- Both variants call `POST /dating/report`; the chat variant simply includes `matchId` (and `targetPetId` set to the *other* pet in that match — the backend rejects the request `400` if `targetPetId` doesn't genuinely resolve to the other side of the given `matchId`, so don't let the caller pick an arbitrary pet here when `matchId` is set — derive `targetPetId` from the match itself, don't ask the user to choose).
+- The "ℹ Our team will be able to see this conversation…" line is deliberate, visible copy on the chat variant only — matches the backend's on-demand, audit-logged (`dating.chat.viewed`) admin review path, same transparency principle already established for NID viewing ("Viewed just now — this view is logged" on the Matched Profile Detail screen). Don't add this line to the plain profile-report variant, which has no conversation for admin to view.
+- Submitting from the chat variant does not delete or hide anything — the reporter's own copy of the conversation is untouched, still fully visible and still sendable-to (unless/until they separately unmatch and delete it). Reporting and deleting are two independent actions with two independent purposes.
 
 ---
 
@@ -459,10 +512,109 @@ Review detail (opens on row click):
 
 ### 12. Dating Reports Queue
 
-Unchanged from the Phase 10 layout — existing `GET /admin/dating/reports` / status-update pattern, not modified by this phase.
+Base list/status-update pattern unchanged from Phase 10. **Phase 12 adds chat context to reports filed from inside a conversation** — a report row now optionally carries a `matchId`, and its detail view gains an on-demand "View conversation" action, following the exact same pattern as the Verification Review Queue's on-demand NID images above:
+
+```
+┌─────────────────────────────────────────────┐
+│  Dating Reports              [ Pending ▾ ]   │
+├───────────────────────────────────────────────┤
+│  Reporter    Target pet   💬  Reason   Action │
+│  jane@…      Rex           ·  Fake...  [Review]│
+│  ariyan@…    Bella          ✓  Harass. [Review]│
+└───────────────────────────────────────────────┘
+
+Review detail (opens on row click), when matchId is present:
+┌─────────────────────────────────────┐
+│  Review — Report #4821           ✕   │
+├─────────────────────────────────────┤
+│  Reporter: ariyan@…                  │
+│  Target: Bella                       │
+│  Reason: Harassment                  │
+│  Details: "Kept messaging after I    │
+│  said no."                           │
+│                                       │
+│  [ View conversation ▾ ]             │
+│  ┌───────────────────────────────┐   │
+│  │  Hi! Rex is cute 🐕            │   │
+│  │              Thanks!            │   │
+│  │  Want to meet up?              │   │
+│  │  ...(loaded on expand)         │   │
+│  └───────────────────────────────┘   │
+│                                       │
+│  [ Dismiss ]   [ Action ]            │
+└─────────────────────────────────────┘
+```
+
+**Notes:**
+- A 💬 icon (or similar) in the list row indicates a report was filed with chat context (`matchId` present) — lets an admin prioritize harassment-in-chat reports, which have direct evidence attached, over profile-only reports.
+- "[ View conversation ▾ ]" is collapsed by default and fetches on expand via `GET /admin/dating/reports/{id}/messages` — **on-demand only, same as the Verification Queue's NID images** (screen 11 above): never pre-loaded with the rest of the report list, and every open is audit-logged (`dating.chat.viewed`) server-side, so admins are not exempt from the audit trail here either.
+- This action returns a `400` for a report filed without `matchId` (a plain profile report) — hide or disable "View conversation" entirely when the report row has no chat context, rather than showing it and letting the click fail.
+- Dismiss/Action buttons are unchanged from Phase 10 — reviewing the conversation is purely informational context for that same existing decision, not a new moderation action of its own.
+
+---
+
+## Real-Time Chat (Socket.IO) Integration — Phase 12
+
+This is the contract the Chat Thread, Matches List, and Match Celebration screens above all build on. Read this section fully before wiring any of them — it's written once here rather than repeated across each screen's notes.
+
+### Why this exists
+
+Phase 10/11 shipped matched chat as pure REST (`GET`/`POST /dating/matches/{id}/messages`) — functional, but with no way for either side to learn about a new message except polling. Phase 12 adds a Socket.IO layer alongside the REST API, not instead of it: **REST remains the source of truth for history and works with zero socket connection at all** (e.g. a client that only ever polls); the socket layer is purely additive, for low-latency delivery and live status updates (typing, match created, match ended) while a client happens to be connected.
+
+**Golden rule: never rely on the socket alone.** On opening any screen that needs match/message data, fetch it via REST first (`GET /dating/matches`, `GET /dating/matches/{id}/messages`) — the socket only tells you about things that happen *after* you're connected and listening. A client that was offline, backgrounded, or never connected needs the REST fetch to catch up; the socket is the "and now, live" layer on top of that baseline.
+
+### Connecting
+
+- **Namespace**: `/dating` off the API's base Socket.IO endpoint (e.g. `wss://api.pawtato.example/dating` in production; the exact host/port matches wherever the REST API itself is served — no separate service to stand up).
+- **Auth**: pass the same JWT access token already used for REST calls, either via the Socket.IO handshake's `auth` option (preferred) or an `Authorization: Bearer <token>` header:
+  ```js
+  const socket = io('https://api.pawtato.example/dating', {
+    auth: { token: accessToken },
+  });
+  ```
+- Auth happens **once, at connection time** — a socket with a missing/expired/invalid token gets an `error` event (`{ message: 'Unauthorized' }`) followed immediately by a disconnect. There is no per-event re-authentication; once connected, the connection is trusted for its lifetime (until the token would need refreshing — see Reconnection below).
+- On successful connection, the server automatically joins the socket to a personal room (`user:<yourUserId>`) — this happens server-side, nothing to emit for it. This is what makes `matchCreated`/`newMessage`/`matchUnmatched` reach you even when you're not on a specific match's chat screen (see Events below).
+
+### Events you emit
+
+| Event | Payload | What it does |
+|---|---|---|
+| `joinMatch` | `{ matchId }` | Joins that match's room (`match:<matchId>`). **Ownership-checked server-side** — a match you don't own a side of responds with an `error` event (`{ message: 'Match not found' }`), same as the REST 404 convention this codebase uses everywhere else. Call this when opening a Chat Thread screen. |
+| `leaveMatch` | `{ matchId }` | Leaves that room. Call when navigating away from a Chat Thread (not strictly required — rooms are per-socket-connection and cleaned up on disconnect — but good hygiene if the same socket connection is reused across a long session visiting many chats). |
+| `sendMessage` | `{ matchId, content }` | Persists a message (identical validation to `POST /dating/matches/{id}/messages`: must own a side, match must be `ACTIVE`) and triggers a `newMessage` broadcast (see below). On failure (e.g. match ended), you get an `error` event with a message — there's no ack/response payload on success, listen for your own `newMessage` echo instead (see Sending below). |
+| `typing` | `{ matchId }` | Fire-and-forget, broadcast to the match room (excluding yourself). Not persisted. Debounce this client-side (e.g. once per few seconds while actively typing), don't emit per keystroke. |
+
+### Events you listen for
+
+| Event | Payload | Delivered to |
+|---|---|---|
+| `joinedMatch` | `{ matchId }` | Acks a successful `joinMatch` — safe to consider the room "live" after this. |
+| `error` | `{ message }` | Any rejected action above — a failed join, a failed send, a failed connection. Not fatal to the connection itself (except the auth-failure case, which does disconnect) — just surface it. |
+| `matchCreated` | `{ matchId, petAId, petBId, ownerAId, ownerBId }` | Both owners' personal rooms (`user:<id>`) — reaches you even if you're not on the Discover/Chat screen at all. Use this to trigger the Match Celebration screen live for the side that *didn't* just swipe (the swiper already gets it synchronously in their `POST /dating/swipe` response). |
+| `newMessage` | `{ matchId, messageId, senderUserId, content, createdAt, ownerAId, ownerBId }` | Both the match's room (`match:<matchId>`, for whoever has that thread open) **and** both owners' personal rooms (for badge/notification purposes even when the thread isn't open). Dedupe on `messageId` if you're listening in both places at once with overlapping UI concerns. |
+| `matchUnmatched` | `{ matchId, petAId, petBId, unmatchedBy, ownerAId, ownerBId }` | Same dual delivery as `newMessage` (match room + both personal rooms). Flip that match to the archived state wherever it's currently rendered (Chat Thread composer disabled, Matches List row shows 🔒). |
+| `typing` | `{ matchId, userId }` | The match room only, excluding the original sender. |
+
+### Sending a message — the recommended flow
+
+1. While connected, prefer `emit('sendMessage', ...)` over the REST `POST` — same backend call, lower latency.
+2. Don't locally-append the message you just sent from a "success" callback — there isn't one. Instead, listen for your own `newMessage` echo (it's broadcast to the match room you're already in, including back to the sender) and append from that. This keeps exactly one code path for "a message arrived," whether it originated from you, the other side, or a REST-only client neither of you would otherwise know about.
+3. If the socket is disconnected (see Reconnection below), fall back to the plain REST `POST /dating/matches/{id}/messages` — it works identically whether or not any socket is connected, and still triggers a `newMessage` broadcast for anyone who *is* connected.
+
+### Reconnection & connection state
+
+- Socket.IO's client library reconnects automatically by default on a dropped connection (network blip, backgrounding on mobile, etc.) — no custom reconnection logic needed for the common case.
+- **A reconnect re-runs the JWT handshake** — if the access token has since expired, the reconnect will fail the same way an initial bad-token connection does (`error` + disconnect). Refresh the token and re-`io(...)` with the new one, same as you'd already need to for a REST call that comes back `401`.
+- **A reconnect does not automatically re-join match rooms** — re-`emit('joinMatch', { matchId })` for whatever match's Chat Thread is currently open after any reconnect (Socket.IO client exposes a `connect` event you can hook for this).
+- Show a subtle "reconnecting…" state in the Chat Thread's composer area while disconnected (disable send, or queue-and-flush) rather than silently failing a `sendMessage` emit into the void — an emit while disconnected is simply dropped, so a client offline for any length of time should fall back to the REST `POST` per point 3 above rather than trusting an emitted message got through.
+
+### Deployment note (for whoever owns infra, not the frontend build itself, but relevant if latency/delivery looks flaky in a specific environment)
+
+The default Socket.IO adapter only broadcasts within a single server process. If the API is ever run as multiple horizontally-scaled instances behind a load balancer, an event published on the instance handling User A's connection won't reach User B's socket if they're connected to a *different* instance, unless a shared adapter (e.g. Redis-backed) is added server-side. Not a frontend concern to work around — just useful context if "messages sometimes don't arrive live" gets reported in a multi-instance environment; it's an infra follow-up, not a client bug.
 
 ---
 
 ## Changelog
 
 - **2026-08-25** — File created (Phase 11). Full page-by-page layout plan for every Dating module screen, including the two new identity-verification screens (owner-facing submit/status) and the new admin verification queue. Other modules (Lost & Found, auth, pet CRUD, general admin dashboard) intentionally left undesigned here — out of scope for this pass.
+- **2026-08-25** — Extensive update for Phase 12 (Dating Hardening), driven by a full end-to-end audit of the dating module against this file and the API. Changes: (1) flagged a cross-cutting requirement for whoever builds the not-yet-designed Pet Create/Edit screen — `gender` is now mandatory on every pet, platform-wide, because Breeding-mode matching is strictly opposite-gender and needs it; (2) Discover screen notes updated to explain the opposite-gender guarantee is enforced server-side, not something the client filters; (3) Matches List updated for the new archived-row state (a match no longer vanishes on unmatch — it stays visible, read-only, until explicitly deleted); (4) Chat Thread substantially reworked: a header overflow menu (Unmatch / Report this chat / Delete conversation), an archived read-only state, and the whole screen now built on a real-time Socket.IO layer instead of REST-only; (5) Matched Profile Detail's existing Unmatch/Report actions annotated as the same calls the Chat Thread's overflow menu makes, with the profile-vs-chat report distinction (matchId attached or not) called out explicitly; (6) Report Profile modal extended with a second "Report this chat" entry point that pre-attaches match context, with a visible "our team can see this conversation" disclosure line mirroring the existing NID-view transparency copy; (7) admin Dating Reports Queue extended with an on-demand, audit-logged "View conversation" action for reports filed with chat context, mirroring the Verification Queue's on-demand NID-image pattern exactly; (8) added a new, extensive "Real-Time Chat (Socket.IO) Integration" section — the full connection/auth/event/reconnection contract every chat-related screen above builds on, written once rather than repeated per screen.

@@ -13,6 +13,7 @@ import { STORAGE_PROVIDER } from '../storage/storage.constants';
 import type { StorageProvider } from '../storage/interfaces/storage-provider.interface';
 import { ActivityService } from '../activity/activity.service';
 import { escapeRegExp } from '../../common/utils/regex.util';
+import { PetGender } from '../../common/enums/pet-gender.enum';
 
 @Injectable()
 export class PetsService {
@@ -440,6 +441,23 @@ export class PetsService {
   async findIdsBySpecies(species: string): Promise<string[]> {
     const ids = await this.petModel.distinct('_id', {
       species: { $regex: `^${escapeRegExp(species.trim())}$`, $options: 'i' },
+    });
+
+    return ids.map((id) => id.toString());
+  }
+
+  // Used by DatingService.discover()'s BREEDING branch — the pool must be
+  // both same-species *and* strictly opposite-gender (Phase 12: breeding
+  // pairs are never same-gender), so this narrows at the query level rather
+  // than filtering an already-paginated page in application code, same
+  // reasoning as findIdsBySpecies above.
+  async findIdsBySpeciesAndGender(
+    species: string,
+    gender: PetGender,
+  ): Promise<string[]> {
+    const ids = await this.petModel.distinct('_id', {
+      species: { $regex: `^${escapeRegExp(species.trim())}$`, $options: 'i' },
+      gender,
     });
 
     return ids.map((id) => id.toString());

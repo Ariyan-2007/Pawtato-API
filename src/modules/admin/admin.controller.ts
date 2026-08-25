@@ -283,6 +283,34 @@ export class AdminController {
 
   @ApiOperation({
     summary:
+      "View a dating report's conversation, if it was filed with one (admin only)",
+    description:
+      'On-demand only — never included in the report list, fetched only when an admin actually ' +
+      'opens it, and audit-logged every time (`dating.chat.viewed`), same pattern as NID review.',
+  })
+  @ApiParam({ name: 'id', description: 'Dating report ID' })
+  @ApiResponse({
+    status: 200,
+    description: "The conversation's messages, oldest first.",
+  })
+  @ApiResponse({ status: 404, description: 'Dating report not found.' })
+  @ApiResponse({
+    status: 400,
+    description:
+      'This report was filed without a matchId — no conversation to show.',
+  })
+  @Get('dating/reports/:id/messages')
+  getDatingReportMessages(
+    @CurrentUser() user: JwtPayload,
+
+    @Param('id', ParseMongoIdPipe)
+    id: string,
+  ) {
+    return this.adminService.datingReportMessages(user.sub, id);
+  }
+
+  @ApiOperation({
+    summary:
       'List identity (NID) verification submissions for review (admin only)',
     description:
       'Never includes the stored image keys/URLs — fetch those on demand per submission via ' +

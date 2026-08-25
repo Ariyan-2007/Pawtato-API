@@ -148,7 +148,7 @@ describe('Admin user-deletion cascade (e2e)', () => {
     const petRes = await request(app.getHttpServer())
       .post('/api/pets')
       .set('Authorization', `Bearer ${ownerAccessToken}`)
-      .send({ name: 'Cascade Cat', species: 'Cat' })
+      .send({ name: 'Cascade Cat', species: 'Cat', gender: 'FEMALE' })
       .expect(201);
 
     petId = data<{ _id: string }>(petRes)._id;

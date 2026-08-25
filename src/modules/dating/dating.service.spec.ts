@@ -1,6 +1,7 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getModelToken } from '@nestjs/mongoose';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Types } from 'mongoose';
 
 import { DatingService } from './dating.service';
@@ -18,6 +19,7 @@ import { DatingMode } from '../../common/enums/dating-mode.enum';
 import { SwipeAction } from '../../common/enums/swipe-action.enum';
 import { MatchStatus } from '../../common/enums/match-status.enum';
 import { DatingReportStatus } from '../../common/enums/dating-report-status.enum';
+import { PetGender } from '../../common/enums/pet-gender.enum';
 
 describe('DatingService', () => {
   let service: DatingService;
@@ -51,6 +53,7 @@ describe('DatingService', () => {
   let datingReportModel: {
     create: jest.Mock;
     find: jest.Mock;
+    findById: jest.Mock;
     countDocuments: jest.Mock;
     findByIdAndUpdate: jest.Mock;
     deleteMany: jest.Mock;
@@ -60,6 +63,7 @@ describe('DatingService', () => {
     findByIdAdmin: jest.Mock;
     findIdsForOwner: jest.Mock;
     findIdsBySpecies: jest.Mock;
+    findIdsBySpeciesAndGender: jest.Mock;
     findOwnersForPets: jest.Mock;
   };
   let medicalService: { findAll: jest.Mock; findAllByPet: jest.Mock };
@@ -70,6 +74,7 @@ describe('DatingService', () => {
     getApprovedUserIds: jest.Mock;
     getSignedNidUrls: jest.Mock;
   };
+  let eventEmitter: { emit: jest.Mock };
 
   const ownerId = new Types.ObjectId().toString();
   const otherOwnerId = new Types.ObjectId().toString();
@@ -81,6 +86,7 @@ describe('DatingService', () => {
     return {
       _id: petId,
       species: 'Cat',
+      gender: PetGender.MALE,
       owner: ownerId,
       ...overrides,
     };
@@ -117,6 +123,7 @@ describe('DatingService', () => {
     datingReportModel = {
       create: jest.fn(),
       find: jest.fn(),
+      findById: jest.fn(),
       countDocuments: jest.fn(),
       findByIdAndUpdate: jest.fn(),
       deleteMany: jest.fn().mockResolvedValue({ deletedCount: 0 }),
@@ -126,6 +133,7 @@ describe('DatingService', () => {
       findByIdAdmin: jest.fn(),
       findIdsForOwner: jest.fn().mockResolvedValue([]),
       findIdsBySpecies: jest.fn().mockResolvedValue([]),
+      findIdsBySpeciesAndGender: jest.fn().mockResolvedValue([]),
       findOwnersForPets: jest.fn().mockResolvedValue(new Map()),
     };
     medicalService = {
@@ -144,6 +152,7 @@ describe('DatingService', () => {
         .fn()
         .mockResolvedValue({ frontUrl: 'front-url', backUrl: 'back-url' }),
     };
+    eventEmitter = { emit: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -167,6 +176,7 @@ describe('DatingService', () => {
           provide: IdentityVerificationService,
           useValue: identityVerificationService,
         },
+        { provide: EventEmitter2, useValue: eventEmitter },
       ],
     }).compile();
 
@@ -456,16 +466,18 @@ describe('DatingService', () => {
       ).rejects.toThrow(BadRequestException);
     });
 
-    it('BREEDING mode restricts candidates to the same species, excluding own/swiped pets', async () => {
+    it('BREEDING mode restricts candidates to the same species and opposite gender, excluding own/swiped pets', async () => {
       profileModel.findOne.mockResolvedValue({
         isActive: true,
         modes: [DatingMode.BREEDING],
       });
-      petsService.findOwnedPet.mockResolvedValue(makePet({ species: 'Cat' }));
+      petsService.findOwnedPet.mockResolvedValue(
+        makePet({ species: 'Cat', gender: PetGender.MALE }),
+      );
       petsService.findIdsForOwner.mockResolvedValue([petId.toString()]);
       swipeModel.distinct.mockResolvedValue([otherPetId]);
       const eligibleId = new Types.ObjectId().toString();
-      petsService.findIdsBySpecies.mockResolvedValue([
+      petsService.findIdsBySpeciesAndGender.mockResolvedValue([
         petId.toString(),
         otherPetId.toString(),
         eligibleId,
@@ -491,7 +503,10 @@ describe('DatingService', () => {
       const candidateIds = capturedFilter!.petId.$in.map((id) => id.toString());
 
       expect(candidateIds).toEqual([eligibleId]);
-      expect(petsService.findIdsBySpecies).toHaveBeenCalledWith('Cat');
+      expect(petsService.findIdsBySpeciesAndGender).toHaveBeenCalledWith(
+        'Cat',
+        PetGender.FEMALE,
+      );
     });
 
     it('PLAYDATE mode never restricts by species', async () => {
@@ -542,6 +557,73 @@ describe('DatingService', () => {
           mode: DatingMode.PLAYDATE,
         }),
       ).rejects.toThrow(BadRequestException);
+    });
+
+    it('rejects two pets owned by the same person, regardless of mode', async () => {
+      petsService.findByIdAdmin.mockResolvedValue(
+        makePet({ _id: otherPetId, species: 'Cat', owner: ownerId }),
+      );
+
+      await expect(
+        service.swipe(ownerId, {
+          fromPetId,
+          toPetId,
+          action: SwipeAction.LIKE,
+          mode: DatingMode.PLAYDATE,
+        }),
+      ).rejects.toThrow(BadRequestException);
+      expect(swipeModel.create).not.toHaveBeenCalled();
+    });
+
+    it('rejects same-gender pets in BREEDING mode', async () => {
+      petsService.findOwnedPet.mockResolvedValue(
+        makePet({ _id: petId, species: 'Cat', gender: PetGender.MALE }),
+      );
+      petsService.findByIdAdmin.mockResolvedValue(
+        makePet({
+          _id: otherPetId,
+          species: 'Cat',
+          gender: PetGender.MALE,
+          owner: otherOwnerId,
+        }),
+      );
+
+      await expect(
+        service.swipe(ownerId, {
+          fromPetId,
+          toPetId,
+          action: SwipeAction.LIKE,
+          mode: DatingMode.BREEDING,
+        }),
+      ).rejects.toThrow(BadRequestException);
+      expect(swipeModel.create).not.toHaveBeenCalled();
+    });
+
+    it('allows opposite-gender, same-species pets in BREEDING mode', async () => {
+      petsService.findOwnedPet.mockResolvedValue(
+        makePet({ _id: petId, species: 'Cat', gender: PetGender.MALE }),
+      );
+      petsService.findByIdAdmin.mockResolvedValue(
+        makePet({
+          _id: otherPetId,
+          species: 'Cat',
+          gender: PetGender.FEMALE,
+          owner: otherOwnerId,
+        }),
+      );
+      swipeModel.findOne.mockResolvedValue(null);
+
+      const result = await service.swipe(ownerId, {
+        fromPetId,
+        toPetId,
+        action: SwipeAction.LIKE,
+        mode: DatingMode.BREEDING,
+      });
+
+      expect(swipeModel.create).toHaveBeenCalledWith(
+        expect.objectContaining({ mode: DatingMode.BREEDING }),
+      );
+      expect(result.match).toBeNull();
     });
 
     it('rejects mismatched species in BREEDING mode', async () => {
@@ -663,7 +745,16 @@ describe('DatingService', () => {
 
     it('a mutual LIKE in the same mode creates a Match in canonical pet-id order', async () => {
       swipeModel.findOne.mockResolvedValue({ _id: new Types.ObjectId() });
-      const createdMatch = { _id: new Types.ObjectId() };
+
+      const [expectedA, expectedB] =
+        petId.toString() < otherPetId.toString()
+          ? [petId, otherPetId]
+          : [otherPetId, petId];
+      const createdMatch = {
+        _id: new Types.ObjectId(),
+        petAId: expectedA,
+        petBId: expectedB,
+      };
       matchModel.create.mockResolvedValue(createdMatch);
 
       const result = await service.swipe(ownerId, {
@@ -672,11 +763,6 @@ describe('DatingService', () => {
         action: SwipeAction.LIKE,
         mode: DatingMode.PLAYDATE,
       });
-
-      const [expectedA, expectedB] =
-        petId.toString() < otherPetId.toString()
-          ? [petId, otherPetId]
-          : [otherPetId, petId];
 
       expect(matchModel.create).toHaveBeenCalledWith({
         petAId: expectedA,
@@ -691,7 +777,16 @@ describe('DatingService', () => {
     it('a race on match creation returns the already-created match instead of erroring', async () => {
       swipeModel.findOne.mockResolvedValue({ _id: new Types.ObjectId() });
       matchModel.create.mockRejectedValue({ code: 11000 });
-      const existingMatch = { _id: new Types.ObjectId() };
+
+      const [expectedA, expectedB] =
+        petId.toString() < otherPetId.toString()
+          ? [petId, otherPetId]
+          : [otherPetId, petId];
+      const existingMatch = {
+        _id: new Types.ObjectId(),
+        petAId: expectedA,
+        petBId: expectedB,
+      };
       matchModel.findOne.mockResolvedValue(existingMatch);
 
       const result = await service.swipe(ownerId, {
@@ -778,7 +873,11 @@ describe('DatingService', () => {
         .mockResolvedValueOnce(
           makePet({ _id: otherPetId, owner: otherOwnerId }),
         );
-      messageModel.create.mockResolvedValue({ content: 'hi' });
+      messageModel.create.mockResolvedValue({
+        _id: new Types.ObjectId(),
+        content: 'hi',
+        createdAt: new Date(),
+      });
 
       await service.sendMessage(ownerId, matchId, { content: 'hi' });
 
@@ -800,6 +899,53 @@ describe('DatingService', () => {
 
       expect(match.status).toBe(MatchStatus.UNMATCHED);
       expect(match.save).toHaveBeenCalled();
+    });
+
+    it('unmatch is idempotent — a second call on an already-unmatched match is a no-op', async () => {
+      const match = makeMatch({ status: MatchStatus.UNMATCHED });
+      matchModel.findById.mockResolvedValue(match);
+      petsService.findByIdAdmin
+        .mockResolvedValueOnce(makePet({ _id: petId, owner: ownerId }))
+        .mockResolvedValueOnce(
+          makePet({ _id: otherPetId, owner: otherOwnerId }),
+        );
+
+      const result = await service.unmatch(ownerId, matchId);
+
+      expect(result.message).toBe('Already unmatched');
+      expect(match.save).not.toHaveBeenCalled();
+      expect(eventEmitter.emit).not.toHaveBeenCalled();
+    });
+
+    it('deleteChat rejects while the match is still active', async () => {
+      matchModel.findById.mockResolvedValue(makeMatch());
+      petsService.findByIdAdmin
+        .mockResolvedValueOnce(makePet({ _id: petId, owner: ownerId }))
+        .mockResolvedValueOnce(
+          makePet({ _id: otherPetId, owner: otherOwnerId }),
+        );
+
+      await expect(service.deleteChat(ownerId, matchId)).rejects.toThrow(
+        BadRequestException,
+      );
+    });
+
+    it('deleteChat adds the caller to deletedBy once unmatched, idempotently', async () => {
+      const match = makeMatch({ status: MatchStatus.UNMATCHED, deletedBy: [] });
+      matchModel.findById.mockResolvedValue(match);
+      petsService.findByIdAdmin.mockImplementation((id: string) =>
+        Promise.resolve(
+          id === petId.toString()
+            ? makePet({ _id: petId, owner: ownerId })
+            : makePet({ _id: otherPetId, owner: otherOwnerId }),
+        ),
+      );
+
+      await service.deleteChat(ownerId, matchId);
+      await service.deleteChat(ownerId, matchId);
+
+      expect(match.deletedBy).toHaveLength(1);
+      expect(match.save).toHaveBeenCalledTimes(1);
     });
 
     it('shareNid rejects an unverified caller', async () => {
@@ -936,6 +1082,76 @@ describe('DatingService', () => {
         expect.objectContaining({ targetPetId: petId.toString() }),
       );
     });
+
+    describe('with chat context (matchId)', () => {
+      const matchId = new Types.ObjectId().toString();
+
+      function stubMatchAndPets() {
+        profileModel.findOne.mockResolvedValue({ _id: new Types.ObjectId() });
+        matchModel.findById.mockResolvedValue({
+          _id: matchId,
+          petAId: petId,
+          petBId: otherPetId,
+        });
+        petsService.findByIdAdmin.mockImplementation((id: string) =>
+          Promise.resolve(
+            id === petId.toString()
+              ? makePet({ _id: petId, owner: ownerId })
+              : makePet({ _id: otherPetId, owner: otherOwnerId }),
+          ),
+        );
+        datingReportModel.create.mockResolvedValue({
+          _id: new Types.ObjectId(),
+        });
+      }
+
+      it('stores matchId when the target is genuinely the other side of the match', async () => {
+        stubMatchAndPets();
+
+        await service.report(ownerId, {
+          targetPetId: otherPetId.toString(),
+          reason: 'Harassment in chat.',
+          matchId,
+        });
+
+        expect(datingReportModel.create).toHaveBeenCalledWith(
+          expect.objectContaining({ matchId }),
+        );
+      });
+
+      it("rejects when targetPetId is the reporter's own pet, even though it's technically in the match", async () => {
+        stubMatchAndPets();
+
+        await expect(
+          service.report(ownerId, {
+            targetPetId: petId.toString(),
+            reason: 'Bogus context.',
+            matchId,
+          }),
+        ).rejects.toThrow(BadRequestException);
+        expect(datingReportModel.create).not.toHaveBeenCalled();
+      });
+
+      it('rejects when the caller owns neither side of the given match (IDOR-safe)', async () => {
+        profileModel.findOne.mockResolvedValue({ _id: new Types.ObjectId() });
+        matchModel.findById.mockResolvedValue({
+          _id: matchId,
+          petAId: petId,
+          petBId: otherPetId,
+        });
+        petsService.findByIdAdmin.mockResolvedValue(
+          makePet({ owner: otherOwnerId }),
+        );
+
+        await expect(
+          service.report(ownerId, {
+            targetPetId: otherPetId.toString(),
+            reason: 'x',
+            matchId,
+          }),
+        ).rejects.toThrow(NotFoundException);
+      });
+    });
   });
 
   describe('admin methods', () => {
@@ -989,6 +1205,47 @@ describe('DatingService', () => {
         'admin-1',
         'admin.dating-profile.deactivated',
         petId.toString(),
+      );
+    });
+
+    it('adminGetReportMessages throws NotFoundException for an unknown report', async () => {
+      datingReportModel.findById.mockResolvedValue(null);
+
+      await expect(
+        service.adminGetReportMessages('admin-1', 'report-1'),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('adminGetReportMessages throws BadRequestException for a report with no matchId', async () => {
+      datingReportModel.findById.mockResolvedValue({ matchId: null });
+
+      await expect(
+        service.adminGetReportMessages('admin-1', 'report-1'),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('adminGetReportMessages returns the conversation and logs the view', async () => {
+      const matchObjectId = new Types.ObjectId();
+      datingReportModel.findById.mockResolvedValue({
+        matchId: matchObjectId,
+      });
+      const sort = jest.fn().mockResolvedValue([{ content: 'hi' }]);
+      messageModel.find.mockReturnValue({ sort });
+
+      const result = await service.adminGetReportMessages(
+        'admin-1',
+        'report-1',
+      );
+
+      expect(messageModel.find).toHaveBeenCalledWith({
+        matchId: matchObjectId,
+      });
+      expect(result).toEqual([{ content: 'hi' }]);
+      expect(activityService.log).toHaveBeenCalledWith(
+        'admin-1',
+        'dating.chat.viewed',
+        'report-1',
+        { matchId: matchObjectId.toString(), context: 'report-review' },
       );
     });
   });

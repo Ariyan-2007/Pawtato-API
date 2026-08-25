@@ -49,6 +49,32 @@ export class Match {
     default: [],
   })
   nidSharedBy!: Types.ObjectId[];
+
+  // Explicit archival record (Phase 12) — set together with `status` flipping
+  // to UNMATCHED in DatingService.unmatch(). Message history stays fully
+  // intact and readable (see DatingService.listMessages()); only new
+  // messages are blocked. Kept separate from `status` so the frontend can
+  // show "archived by <name> on <date>" rather than inferring it.
+  @Prop({ type: Types.ObjectId, ref: 'User', default: null })
+  unmatchedBy!: Types.ObjectId | null;
+
+  @Prop()
+  unmatchedAt?: Date;
+
+  // Per-side "delete conversation" (Phase 12) — hides the match from that
+  // user's own matches list/message view once both sides no longer need it.
+  // Deliberately never a hard delete: the underlying Match/Message documents
+  // are left intact even once both owners have deleted, so a pending or
+  // future DatingReport referencing this match can still be reviewed with
+  // full chat context. Only ever settable via DatingService.deleteChat(),
+  // and only once the match is already UNMATCHED — deleting an active
+  // conversation out from under the other party isn't allowed.
+  @Prop({
+    type: [Types.ObjectId],
+    ref: 'User',
+    default: [],
+  })
+  deletedBy!: Types.ObjectId[];
 }
 
 export const MatchSchema = SchemaFactory.createForClass(Match);

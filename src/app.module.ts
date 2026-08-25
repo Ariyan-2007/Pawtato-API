@@ -45,6 +45,31 @@ import { DatingModule } from './modules/dating/dating.module';
     ScheduleModule.forRoot(),
     EventEmitterModule.forRoot(),
 
+    // Found and fixed while building out Phase 12's dating e2e coverage: with
+    // multiple named tiers registered here, @nestjs/throttler's ThrottlerGuard
+    // checks EVERY tier against EVERY route on EVERY request, not just the
+    // tier(s) named on that route's own @Throttle decorator — a route with no
+    // decorator at all still gets checked against 'public'/'write'/'swipe'
+    // using each tier's *global* default from this array (see
+    // ThrottlerGuard.canActivate(), which iterates `this.throttlers` and
+    // falls back to `namedThrottler.limit` whenever no route-level override
+    // is found). Before this fix, that meant every undecorated route in the
+    // entire app — e.g. POST /pets, which has never had a @Throttle of its
+    // own — was silently capped at the 'write' tier's 5 req/min default,
+    // completely unrelated to its own actual traffic shape. This was a real,
+    // pre-existing production bug (present since Phase 1, when 'write' was
+    // introduced) that simply never got exercised: no prior e2e suite made
+    // more than 5 calls to the same undecorated route within one minute,
+    // until the Phase 12 dating e2e suite's pet-creation volume tripped it.
+    // Fix: only 'default' is meant to apply globally to every route (its
+    // whole purpose); 'public'/'write'/'swipe' are meant to be *opt-in*,
+    // stricter caps applied only via an explicit @Throttle({name: {...}})
+    // on the specific abuse-prone routes that already declare one (see
+    // auth/public/dating/identity-verification controllers) — a route-level
+    // @Throttle override always wins over these array defaults regardless of
+    // the number here, so raising these three doesn't loosen any of those
+    // already-decorated routes' real limits at all, it just stops them from
+    // silently applying to routes that never opted in.
     ThrottlerModule.forRoot([
       {
         name: 'default',
@@ -54,17 +79,17 @@ import { DatingModule } from './modules/dating/dating.module';
       {
         name: 'public',
         ttl: 60_000,
-        limit: 20,
+        limit: 1_000_000,
       },
       {
         name: 'write',
         ttl: 60_000,
-        limit: 5,
+        limit: 1_000_000,
       },
       {
         name: 'swipe',
         ttl: 60_000,
-        limit: 60,
+        limit: 1_000_000,
       },
     ]),
 
