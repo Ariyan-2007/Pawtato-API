@@ -4,7 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { EventEmitter2 } from '@nestjs/event-emitter';
+import { EventEmitter2, OnEvent } from '@nestjs/event-emitter';
 import { Model, Types } from 'mongoose';
 
 import {
@@ -357,12 +357,18 @@ export class DatingService {
 
     const total = await this.profileModel.countDocuments(filter);
 
-    const profiles = await this.profileModel
-      .find(filter)
-      .populate('petId', 'name species breed profileImage')
-      .sort({ createdAt: -1 })
-      .skip((page - 1) * limit)
-      .limit(limit);
+    // petId can populate to null for a profile whose pet was deleted via the
+    // owner self-service path before the dating.PET_DELETED cascade caught up
+    // (or for any pre-existing orphan from before that cascade existed) —
+    // drop those rather than crashing on the unconditional `.petId._id` below.
+    const profiles = (
+      await this.profileModel
+        .find(filter)
+        .populate('petId', 'name species breed profileImage')
+        .sort({ createdAt: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+    ).filter((p) => p.petId);
 
     const pageOwnerMap = await this.petsService.findOwnersForPets(
       profiles.map((p) =>
@@ -569,30 +575,36 @@ export class DatingService {
     // `mode` isn't stored on Match itself (see PAWTATO_ROADMAP.md Phase 11)
     // — reconstructed from the originating reciprocal-LIKE Swipe pair for
     // display purposes (e.g. the frontend's Matches List mode icon).
+    // Same orphaned-petId guard as discover() — see comment there.
     return Promise.all(
-      matches.map(async (match) => {
-        const petA = match.petAId as unknown as { _id: Types.ObjectId };
-        const petB = match.petBId as unknown as { _id: Types.ObjectId };
+      matches
+        .filter((match) => match.petAId && match.petBId)
+        .map(async (match) => {
+          const petA = match.petAId as unknown as { _id: Types.ObjectId };
+          const petB = match.petBId as unknown as { _id: Types.ObjectId };
 
-        const originatingSwipe = await this.swipeModel
-          .findOne({
-            $or: [
-              {
-                fromPetId: petA._id,
-                toPetId: petB._id,
-                action: SwipeAction.LIKE,
-              },
-              {
-                fromPetId: petB._id,
-                toPetId: petA._id,
-                action: SwipeAction.LIKE,
-              },
-            ],
-          })
-          .sort({ createdAt: 1 });
+          const originatingSwipe = await this.swipeModel
+            .findOne({
+              $or: [
+                {
+                  fromPetId: petA._id,
+                  toPetId: petB._id,
+                  action: SwipeAction.LIKE,
+                },
+                {
+                  fromPetId: petB._id,
+                  toPetId: petA._id,
+                  action: SwipeAction.LIKE,
+                },
+              ],
+            })
+            .sort({ createdAt: 1 });
 
-        return { ...match.toObject(), mode: originatingSwipe?.mode ?? null };
-      }),
+          return {
+            ...match.toObject(),
+            mode: originatingSwipe?.mode ?? null,
+          };
+        }),
     );
   }
 
@@ -994,6 +1006,17 @@ export class DatingService {
   }
 
   // --- Cascade delete (see AdminService.cascadeDeleteUserData / deletePet) ---
+
+  // PetsService.remove() (owner self-service delete) has no explicit cascade
+  // like AdminService.deletePet does, so it fires this event instead. Without
+  // it, a self-deleted pet's dating profile/swipes/matches would linger with
+  // a petId that no longer resolves — .populate('petId') then returns null
+  // for that document, and any code that dereferences it unconditionally
+  // (e.g. discover(), listMatches()) throws.
+  @OnEvent(DOMAIN_EVENTS.PET_DELETED)
+  async handlePetDeleted(payload: { petId: string; ownerId: string }) {
+    await this.deleteAllForPets([payload.petId]);
+  }
 
   async deleteAllForPets(petIds: string[]) {
     if (petIds.length === 0) {
