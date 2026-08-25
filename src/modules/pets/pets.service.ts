@@ -161,6 +161,15 @@ export class PetsService {
 
     await this.deleteOldPhoto(pet.profileImage);
 
+    // Unlike AdminService.deletePet, this self-service path has no explicit
+    // cascade — modules with pet-keyed data (dating, medical, vaccinations,
+    // scans, found reports) clean up after themselves via this event instead,
+    // to avoid PetsService depending on all of them directly.
+    this.eventEmitter.emit(DOMAIN_EVENTS.PET_DELETED, {
+      petId: pet._id.toString(),
+      ownerId,
+    });
+
     return {
       message: 'Pet deleted successfully',
     };

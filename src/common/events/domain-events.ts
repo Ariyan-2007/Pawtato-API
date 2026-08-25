@@ -11,6 +11,12 @@ export const DOMAIN_EVENTS = {
   QR_TAG_SCANNED: 'qr.tag-scanned',
   FOUND_REPORT_CREATED: 'found-report.created',
   VACCINATION_REMINDER_DUE: 'vaccination.reminder-due',
+  // Owner self-service pet deletion (PetsService.remove) — lets modules with
+  // pet-keyed data (dating profiles/swipes/matches, medical, vaccinations,
+  // scans, found reports, ...) clean up after themselves without PetsService
+  // depending on any of them directly. Mirrors AdminService.deletePet's
+  // explicit cascade, which stays as-is for admin-initiated deletes.
+  PET_DELETED: 'pet.deleted',
   // Phase 12 — real-time dating signaling. DatingGateway (the Socket.IO
   // layer) listens on these three rather than DatingService reaching into
   // the gateway directly, same decoupling principle as every notification
@@ -86,6 +92,11 @@ export interface VaccinationReminderDueEvent {
   petName: string;
   vaccineName: string;
   nextDueDate: Date;
+}
+
+export interface PetDeletedEvent {
+  petId: string;
+  ownerId: string;
 }
 
 export interface DatingMatchCreatedEvent {
