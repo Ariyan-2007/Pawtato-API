@@ -1,4 +1,4 @@
-import { IsInt, IsOptional, Min } from 'class-validator';
+import { IsInt, IsOptional, IsString, Min } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { ParseOptionalBoolean } from '../../../common/decorators/parse-optional-boolean.decorator';
@@ -21,4 +21,15 @@ export class NotificationQueryDto {
   @ApiPropertyOptional({ description: 'Return only unread notifications' })
   @ParseOptionalBoolean()
   unreadOnly?: boolean;
+
+  @ApiPropertyOptional({
+    description:
+      'Restrict to a single notification type (one of the DOMAIN_EVENTS values, e.g. ' +
+      '"dating.match-created") — lets a specific UI surface (e.g. the Matchup section\'s ' +
+      'new-match indicator) query just its own notifications instead of the full list.',
+    example: 'dating.match-created',
+  })
+  @IsOptional()
+  @IsString()
+  type?: string;
 }

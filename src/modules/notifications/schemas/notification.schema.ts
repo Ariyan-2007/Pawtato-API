@@ -66,3 +66,7 @@ NotificationSchema.index({ user: 1, createdAt: -1 });
 NotificationSchema.index({ user: 1, readAt: 1 });
 NotificationSchema.index({ user: 1, pet: 1, priority: 1 });
 NotificationSchema.index({ expiresAt: 1 });
+// Backs NotificationQueryDto's `type` filter (e.g. a Matchup-section badge
+// querying just `dating.match-created` notifications) combined with the
+// existing unread filter, without a full per-user collection scan.
+NotificationSchema.index({ user: 1, type: 1, readAt: 1 });

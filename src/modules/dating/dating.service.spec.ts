@@ -2,6 +2,7 @@ import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getModelToken } from '@nestjs/mongoose';
 import { EventEmitter2 } from '@nestjs/event-emitter';
+import { ConfigService } from '@nestjs/config';
 import { Types } from 'mongoose';
 
 import { DatingService } from './dating.service';
@@ -20,6 +21,7 @@ import { SwipeAction } from '../../common/enums/swipe-action.enum';
 import { MatchStatus } from '../../common/enums/match-status.enum';
 import { DatingReportStatus } from '../../common/enums/dating-report-status.enum';
 import { PetGender } from '../../common/enums/pet-gender.enum';
+import { DOMAIN_EVENTS } from '../../common/events/domain-events';
 
 describe('DatingService', () => {
   let service: DatingService;
@@ -75,6 +77,7 @@ describe('DatingService', () => {
     getSignedNidUrls: jest.Mock;
   };
   let eventEmitter: { emit: jest.Mock };
+  let configService: { get: jest.Mock };
 
   const ownerId = new Types.ObjectId().toString();
   const otherOwnerId = new Types.ObjectId().toString();
@@ -153,6 +156,7 @@ describe('DatingService', () => {
         .mockResolvedValue({ frontUrl: 'front-url', backUrl: 'back-url' }),
     };
     eventEmitter = { emit: jest.fn() };
+    configService = { get: jest.fn().mockReturnValue(3) };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -177,6 +181,7 @@ describe('DatingService', () => {
           useValue: identityVerificationService,
         },
         { provide: EventEmitter2, useValue: eventEmitter },
+        { provide: ConfigService, useValue: configService },
       ],
     }).compile();
 
@@ -528,6 +533,81 @@ describe('DatingService', () => {
 
       expect(petsService.findIdsBySpecies).not.toHaveBeenCalled();
     });
+
+    it('excludes only swipes still inside the reset window, not every swipe ever made', async () => {
+      profileModel.findOne.mockResolvedValue({
+        isActive: true,
+        modes: [DatingMode.PLAYDATE],
+      });
+      profileModel.distinct.mockResolvedValue([]);
+      profileModel.countDocuments.mockResolvedValue(0);
+      stubProfileFind([]);
+
+      await service.discover(ownerId, {
+        petId: petId.toString(),
+        mode: DatingMode.PLAYDATE,
+        page: 1,
+        limit: 10,
+      });
+
+      const [, distinctFilter] = swipeModel.distinct.mock.calls[0] as [
+        string,
+        {
+          fromPetId: Types.ObjectId;
+          mode: DatingMode;
+          updatedAt: { $gte: Date };
+        },
+      ];
+
+      expect(distinctFilter).toMatchObject({
+        fromPetId: petId,
+        mode: DatingMode.PLAYDATE,
+      });
+      expect(distinctFilter.updatedAt.$gte).toBeInstanceOf(Date);
+    });
+
+    it('excludes an actively matched pet from the pool regardless of swipe age', async () => {
+      profileModel.findOne.mockResolvedValue({
+        isActive: true,
+        modes: [DatingMode.PLAYDATE],
+      });
+      profileModel.distinct.mockResolvedValue([]);
+      profileModel.countDocuments.mockResolvedValue(0);
+      swipeModel.distinct.mockResolvedValue([]);
+      stubProfileFind([]);
+
+      const matchedPetId = new Types.ObjectId();
+      matchModel.find.mockResolvedValue([
+        {
+          petAId: petId,
+          petBId: matchedPetId,
+          status: MatchStatus.ACTIVE,
+        },
+      ]);
+
+      let capturedFilter: { petId: { $nin: Types.ObjectId[] } } | undefined;
+      profileModel.distinct.mockImplementation(
+        (_field: string, filter: { petId: { $nin: Types.ObjectId[] } }) => {
+          capturedFilter = filter;
+          return Promise.resolve([]);
+        },
+      );
+
+      await service.discover(ownerId, {
+        petId: petId.toString(),
+        mode: DatingMode.PLAYDATE,
+        page: 1,
+        limit: 10,
+      });
+
+      expect(matchModel.find).toHaveBeenCalledWith(
+        expect.objectContaining({ status: MatchStatus.ACTIVE }),
+        expect.anything(),
+      );
+
+      const excludedIds = capturedFilter!.petId.$nin.map((id) => id.toString());
+      expect(excludedIds).toContain(matchedPetId.toString());
+    });
   });
 
   describe('swipe', () => {
@@ -744,7 +824,9 @@ describe('DatingService', () => {
     });
 
     it('a mutual LIKE in the same mode creates a Match in canonical pet-id order', async () => {
-      swipeModel.findOne.mockResolvedValue({ _id: new Types.ObjectId() });
+      swipeModel.findOne
+        .mockResolvedValueOnce(null) // no existing swipe from fromPet -> toPet
+        .mockResolvedValueOnce({ _id: new Types.ObjectId() }); // reciprocal LIKE
 
       const [expectedA, expectedB] =
         petId.toString() < otherPetId.toString()
@@ -775,7 +857,9 @@ describe('DatingService', () => {
     });
 
     it('a race on match creation returns the already-created match instead of erroring', async () => {
-      swipeModel.findOne.mockResolvedValue({ _id: new Types.ObjectId() });
+      swipeModel.findOne
+        .mockResolvedValueOnce(null) // no existing swipe from fromPet -> toPet
+        .mockResolvedValueOnce({ _id: new Types.ObjectId() }); // reciprocal LIKE
       matchModel.create.mockRejectedValue({ code: 11000 });
 
       const [expectedA, expectedB] =
@@ -797,6 +881,112 @@ describe('DatingService', () => {
       });
 
       expect(result.match).toBe(existingMatch);
+    });
+
+    it('rejects a re-swipe while the previous swipe is still inside the reset window', async () => {
+      const recentSwipe = {
+        action: SwipeAction.PASS,
+        updatedAt: new Date(),
+        save: jest.fn(),
+      };
+      swipeModel.findOne.mockResolvedValueOnce(recentSwipe);
+
+      await expect(
+        service.swipe(ownerId, {
+          fromPetId,
+          toPetId,
+          action: SwipeAction.LIKE,
+          mode: DatingMode.PLAYDATE,
+        }),
+      ).rejects.toThrow(BadRequestException);
+      expect(recentSwipe.save).not.toHaveBeenCalled();
+      expect(swipeModel.create).not.toHaveBeenCalled();
+    });
+
+    it('upserts an expired swipe in place instead of rejecting, letting a reappeared pet be swiped on again', async () => {
+      const expiredSwipe = {
+        action: SwipeAction.PASS,
+        updatedAt: new Date(Date.now() - 4 * 24 * 60 * 60 * 1000),
+        save: jest.fn().mockResolvedValue(undefined),
+      };
+      swipeModel.findOne
+        .mockResolvedValueOnce(expiredSwipe) // existing-swipe check
+        .mockResolvedValueOnce(null); // reciprocal check
+
+      const result = await service.swipe(ownerId, {
+        fromPetId,
+        toPetId,
+        action: SwipeAction.LIKE,
+        mode: DatingMode.PLAYDATE,
+      });
+
+      expect(expiredSwipe.action).toBe(SwipeAction.LIKE);
+      expect(expiredSwipe.save).toHaveBeenCalled();
+      expect(swipeModel.create).not.toHaveBeenCalled();
+      expect(result.match).toBeNull();
+    });
+
+    it('emits DATING_MATCH_CREATED with both pet names on a genuine new match', async () => {
+      petsService.findOwnedPet.mockResolvedValue(
+        makePet({ _id: petId, species: 'Cat', name: 'Rex' }),
+      );
+      petsService.findByIdAdmin.mockResolvedValue(
+        makePet({
+          _id: otherPetId,
+          species: 'Cat',
+          name: 'Bella',
+          owner: otherOwnerId,
+        }),
+      );
+      swipeModel.findOne
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({ _id: new Types.ObjectId() });
+
+      const [expectedA, expectedB] =
+        petId.toString() < otherPetId.toString()
+          ? [petId, otherPetId]
+          : [otherPetId, petId];
+      matchModel.create.mockResolvedValue({
+        _id: new Types.ObjectId(),
+        petAId: expectedA,
+        petBId: expectedB,
+      });
+
+      await service.swipe(ownerId, {
+        fromPetId,
+        toPetId,
+        action: SwipeAction.LIKE,
+        mode: DatingMode.PLAYDATE,
+      });
+
+      expect(eventEmitter.emit).toHaveBeenCalledWith(
+        DOMAIN_EVENTS.DATING_MATCH_CREATED,
+        expect.objectContaining({ petAName: 'Rex', petBName: 'Bella' }),
+      );
+    });
+
+    it('does not re-emit DATING_MATCH_CREATED for the race loser on a duplicate/retried match request', async () => {
+      swipeModel.findOne
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({ _id: new Types.ObjectId() });
+      matchModel.create.mockRejectedValue({ code: 11000 });
+      matchModel.findOne.mockResolvedValue({
+        _id: new Types.ObjectId(),
+        petAId: petId,
+        petBId: otherPetId,
+      });
+
+      await service.swipe(ownerId, {
+        fromPetId,
+        toPetId,
+        action: SwipeAction.LIKE,
+        mode: DatingMode.PLAYDATE,
+      });
+
+      expect(eventEmitter.emit).not.toHaveBeenCalledWith(
+        DOMAIN_EVENTS.DATING_MATCH_CREATED,
+        expect.anything(),
+      );
     });
   });
 

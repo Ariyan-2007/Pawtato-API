@@ -44,4 +44,14 @@ export default () => ({
       forcePathStyle: process.env.S3_FORCE_PATH_STYLE === 'true',
     },
   },
+
+  dating: {
+    // How long a swiped-on pet (LIKE or PASS, as long as it never became an
+    // ACTIVE match) stays hidden from that pet's discover() pool before it's
+    // eligible to reappear. An ACTIVE match is excluded independently of
+    // this window (see DatingService.getActiveMatchPartnerIds) and never
+    // reappears on its own — only an explicit unmatch hands it back to this
+    // same reset rule.
+    poolResetDays: parseInt(process.env.DATING_POOL_RESET_DAYS || '3', 10),
+  },
 });

@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { EventEmitter2, OnEvent } from '@nestjs/event-emitter';
+import { ConfigService } from '@nestjs/config';
 import { Model, Types } from 'mongoose';
 
 import {
@@ -89,7 +90,41 @@ export class DatingService {
     private readonly activityService: ActivityService,
     private readonly identityVerificationService: IdentityVerificationService,
     private readonly eventEmitter: EventEmitter2,
+    private readonly configService: ConfigService,
   ) {}
+
+  // The single authoritative place the dating-pool reset window is read
+  // from — everything that needs to know whether a swipe has "expired"
+  // (discover()'s exclusion set, swipe()'s re-swipe check) goes through
+  // this, so the two can never drift apart. Configurable via
+  // DATING_POOL_RESET_DAYS (default 3) rather than hardcoded.
+  private getPoolResetCutoff(): Date {
+    const resetDays = this.configService.get<number>('dating.poolResetDays', 3);
+
+    return new Date(Date.now() - resetDays * 24 * 60 * 60 * 1000);
+  }
+
+  // Pets currently in an ACTIVE match with `petId` — excluded from that
+  // pet's discover() pool unconditionally, regardless of how old (or
+  // fresh) the originating swipe is. This is what makes the "active match
+  // never reappears" rule take priority over the swipe reset window (see
+  // discover()); an UNMATCHED match no longer counts, which is exactly
+  // what hands the pair back to the normal swipe-reset rule after unmatch.
+  private async getActiveMatchPartnerIds(
+    petId: Types.ObjectId,
+  ): Promise<Types.ObjectId[]> {
+    const matches = await this.matchModel.find(
+      {
+        $or: [{ petAId: petId }, { petBId: petId }],
+        status: MatchStatus.ACTIVE,
+      },
+      { petAId: 1, petBId: 1 },
+    );
+
+    return matches.map((match) =>
+      match.petAId.equals(petId) ? match.petBId : match.petAId,
+    );
+  }
 
   private assertDatableSpecies(species: string) {
     if (!DATABLE_SPECIES.includes(species.trim().toLowerCase())) {
@@ -299,14 +334,33 @@ export class DatingService {
       );
     }
 
-    const [ownPetIds, swipedPetIds] = await Promise.all([
-      this.petsService.findIdsForOwner(ownerId),
-      this.swipeModel.distinct('toPetId', { fromPetId: pet._id, mode }),
-    ]);
+    // Priority order for pool eligibility (never let these drift apart —
+    // see PAWTATO_FRONTEND_BLUEPRINT.md's Dating Pool Eligibility section):
+    // 1. An ACTIVE match is excluded unconditionally, no matter how old the
+    //    swipe that created it is — getActiveMatchPartnerIds() alone
+    //    decides this, independent of the reset window below.
+    // 2. Anything swiped on (LIKE or PASS) within the reset window is
+    //    hidden — this is what makes a skipped pet disappear temporarily.
+    // 3. Once a swipe is older than the reset window, it stops excluding —
+    //    the pet is eligible again (this also covers "unmatch": an
+    //    UNMATCHED match no longer counts in step 1, so the pair falls
+    //    through to this same reset-window rule on the swipe that
+    //    originally matched them).
+    const [ownPetIds, recentlySwipedPetIds, activeMatchPartnerIds] =
+      await Promise.all([
+        this.petsService.findIdsForOwner(ownerId),
+        this.swipeModel.distinct('toPetId', {
+          fromPetId: pet._id,
+          mode,
+          updatedAt: { $gte: this.getPoolResetCutoff() },
+        }),
+        this.getActiveMatchPartnerIds(pet._id),
+      ]);
 
     const excludeIds = new Set<string>([
       ...ownPetIds,
-      ...swipedPetIds.map((id) => id.toString()),
+      ...recentlySwipedPetIds.map((id) => id.toString()),
+      ...activeMatchPartnerIds.map((id) => id.toString()),
     ]);
 
     const profileFilter: Record<string, unknown> = {
@@ -481,23 +535,50 @@ export class DatingService {
       }
     }
 
+    // At most one Swipe row ever exists per (fromPetId, toPetId, mode) —
+    // see swipe.schema.ts. A fresh/still-active one blocks a second swipe
+    // the same way it always has; one that's aged past the dating-pool
+    // reset window is upserted in place instead, which is what lets a
+    // previously skipped/liked pet be swiped on again once it's reappeared
+    // in discover().
+    const existingSwipe = await this.swipeModel.findOne({
+      fromPetId: fromPet._id,
+      toPetId: toPet._id,
+      mode: dto.mode,
+    });
+
     let swipe: SwipeDocument;
 
-    try {
-      swipe = await this.swipeModel.create({
-        fromPetId: fromPet._id,
-        toPetId: toPet._id,
-        action: dto.action,
-        mode: dto.mode,
-      });
-    } catch (error) {
-      if (isDuplicateKeyError(error)) {
+    if (existingSwipe) {
+      const updatedAt = (existingSwipe as unknown as { updatedAt: Date })
+        .updatedAt;
+
+      if (updatedAt >= this.getPoolResetCutoff()) {
         throw new BadRequestException(
           'You already swiped on this pet in this mode',
         );
       }
 
-      throw error;
+      existingSwipe.action = dto.action;
+      await existingSwipe.save();
+      swipe = existingSwipe;
+    } else {
+      try {
+        swipe = await this.swipeModel.create({
+          fromPetId: fromPet._id,
+          toPetId: toPet._id,
+          action: dto.action,
+          mode: dto.mode,
+        });
+      } catch (error) {
+        if (isDuplicateKeyError(error)) {
+          throw new BadRequestException(
+            'You already swiped on this pet in this mode',
+          );
+        }
+
+        throw error;
+      }
     }
 
     if (dto.action !== SwipeAction.LIKE) {
@@ -518,9 +599,11 @@ export class DatingService {
     const [petAId, petBId] = canonicalPair(fromPet._id, toPet._id);
 
     let match: MatchDocument;
+    let isNewMatch: boolean;
 
     try {
       match = await this.matchModel.create({ petAId, petBId });
+      isNewMatch = true;
     } catch (error) {
       if (!isDuplicateKeyError(error)) {
         throw error;
@@ -530,6 +613,8 @@ export class DatingService {
       // like and raced to create the match — the loser here isn't wrong,
       // the winner's document is just the one that stuck. Return it rather
       // than erroring, so both callers see the same successful outcome.
+      // `isNewMatch` stays false on this path — see below for why that
+      // matters for the DATING_MATCH_CREATED event.
       const existing = await this.matchModel.findOne({ petAId, petBId });
 
       if (!existing) {
@@ -537,18 +622,29 @@ export class DatingService {
       }
 
       match = existing;
+      isNewMatch = false;
     }
 
-    const fromIsA = match.petAId.equals(fromPet._id);
-    const toOwnerId = extractOwnerId(toPet.owner);
+    // Only the swipe request that actually inserted the Match fires the
+    // event — the race-loser branch above (and any later re-swipe on an
+    // already-matched pair) resolves to the same Match document without
+    // re-emitting, so a retried/duplicate request can never produce a
+    // second match-created notification for the same match (see
+    // DomainEventsListener.onDatingMatchCreated).
+    if (isNewMatch) {
+      const fromIsA = match.petAId.equals(fromPet._id);
+      const toOwnerId = extractOwnerId(toPet.owner);
 
-    this.eventEmitter.emit(DOMAIN_EVENTS.DATING_MATCH_CREATED, {
-      matchId: match._id.toString(),
-      petAId: match.petAId.toString(),
-      petBId: match.petBId.toString(),
-      ownerAId: fromIsA ? ownerId : toOwnerId,
-      ownerBId: fromIsA ? toOwnerId : ownerId,
-    });
+      this.eventEmitter.emit(DOMAIN_EVENTS.DATING_MATCH_CREATED, {
+        matchId: match._id.toString(),
+        petAId: match.petAId.toString(),
+        petBId: match.petBId.toString(),
+        ownerAId: fromIsA ? ownerId : toOwnerId,
+        ownerBId: fromIsA ? toOwnerId : ownerId,
+        petAName: fromIsA ? fromPet.name : toPet.name,
+        petBName: fromIsA ? toPet.name : fromPet.name,
+      });
+    }
 
     return { swipe, match };
   }

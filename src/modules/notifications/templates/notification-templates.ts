@@ -76,6 +76,19 @@ export function renderNotification(
         sendEmail: true,
       };
 
+    case DOMAIN_EVENTS.DATING_MATCH_CREATED: {
+      const otherPetName =
+        typeof payload.otherPetName === 'string'
+          ? payload.otherPetName
+          : 'another pet';
+
+      return {
+        title: "It's a match!",
+        message: `${petName} matched with ${otherPetName}. Say hello!`,
+        sendEmail: false,
+      };
+    }
+
     default:
       return {
         title: 'Notification',
