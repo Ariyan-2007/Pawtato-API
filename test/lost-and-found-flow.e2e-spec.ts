@@ -110,7 +110,7 @@ describe('Lost & found flow (e2e)', () => {
     const res = await request(app.getHttpServer())
       .post('/api/pets')
       .set('Authorization', `Bearer ${accessToken}`)
-      .send({ name: 'Milo', species: 'Cat', breed: 'Persian' })
+      .send({ name: 'Milo', species: 'Cat', breed: 'Persian', gender: 'MALE' })
       .expect(201);
 
     const pet = data<{ _id: string; isLost: boolean }>(res);

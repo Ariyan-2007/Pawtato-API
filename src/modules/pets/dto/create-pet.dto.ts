@@ -1,6 +1,7 @@
 import {
   IsBoolean,
   IsDateString,
+  IsEnum,
   IsNumber,
   IsOptional,
   IsString,
@@ -9,6 +10,8 @@ import {
   Min,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+
+import { PetGender } from '../../../common/enums/pet-gender.enum';
 
 export class CreatePetDto {
   @ApiProperty({ example: 'Milo' })
@@ -27,11 +30,15 @@ export class CreatePetDto {
   @MaxLength(100)
   breed?: string;
 
-  @ApiPropertyOptional({ example: 'Male' })
-  @IsOptional()
-  @IsString()
-  @MaxLength(50)
-  gender?: string;
+  @ApiProperty({
+    enum: PetGender,
+    example: PetGender.MALE,
+    description:
+      'Required — Breeding-mode dating match compatibility is strictly opposite-gender, which ' +
+      "depends on every pet's sex being on file from creation.",
+  })
+  @IsEnum(PetGender)
+  gender!: PetGender;
 
   @ApiPropertyOptional({ example: 'White' })
   @IsOptional()

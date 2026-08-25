@@ -5,6 +5,10 @@ import request from 'supertest';
 import type { Response } from 'supertest';
 import type { App } from 'supertest/types';
 import type { Model } from 'mongoose';
+import type { AddressInfo } from 'net';
+import type { Server } from 'http';
+import { io } from 'socket.io-client';
+import type { Socket } from 'socket.io-client';
 
 import { createTestApp } from './test-app';
 import { User, UserDocument } from '../src/modules/users/schemas/user.schema';
@@ -88,12 +92,42 @@ describe('Pet dating flow (e2e)', () => {
       builder.overrideProvider(MailerService).useValue(mailerService),
     );
 
+    // A real listening port is needed for the WebSocket gateway block below
+    // — socket.io-client needs an actual TCP/HTTP upgrade target, unlike
+    // supertest's in-process request driving used everywhere else in this
+    // file (supertest still works fine against an already-listening server).
+    await app.listen(0);
+    const httpServer = app.getHttpServer() as Server;
+    const port = (httpServer.address() as AddressInfo).port;
+    socketBaseUrl = `http://127.0.0.1:${port}/dating`;
+
     userModel = app.get<Model<UserDocument>>(getModelToken(User.name));
   });
 
   afterAll(async () => {
     await app.close();
   });
+
+  let socketBaseUrl: string;
+
+  function connectSocket(accessToken: string): Promise<Socket> {
+    return new Promise((resolve, reject) => {
+      const socket = io(socketBaseUrl, {
+        auth: { token: accessToken },
+        transports: ['websocket'],
+        forceNew: true,
+      });
+
+      socket.once('connect', () => resolve(socket));
+      socket.once('connect_error', (error: Error) => reject(error));
+    });
+  }
+
+  function waitForEvent<T>(socket: Socket, event: string): Promise<T> {
+    return new Promise((resolve) => {
+      socket.once(event, (payload: T) => resolve(payload));
+    });
+  }
 
   it('promotes a freshly-registered account to ADMIN', async () => {
     const { user } = await registerAndVerify('Dating Admin', adminEmail);
@@ -118,23 +152,31 @@ describe('Pet dating flow (e2e)', () => {
     const petARes = await request(app.getHttpServer())
       .post('/api/pets')
       .set('Authorization', `Bearer ${ownerAAccessToken}`)
-      .send({ name: 'Dating Cat A', species: 'Cat' })
+      .send({ name: 'Dating Cat A', species: 'Cat', gender: 'MALE' })
       .expect(201);
     petAId = data<{ _id: string }>(petARes)._id;
 
     const petBRes = await request(app.getHttpServer())
       .post('/api/pets')
       .set('Authorization', `Bearer ${ownerBAccessToken}`)
-      .send({ name: 'Dating Cat B', species: 'Cat' })
+      .send({ name: 'Dating Cat B', species: 'Cat', gender: 'FEMALE' })
       .expect(201);
     petBId = data<{ _id: string }>(petBRes)._id;
+  });
+
+  it('rejects a pet with no gender', async () => {
+    await request(app.getHttpServer())
+      .post('/api/pets')
+      .set('Authorization', `Bearer ${ownerAAccessToken}`)
+      .send({ name: 'No Gender Cat', species: 'Cat' })
+      .expect(400);
   });
 
   it('rejects a dating profile for a species other than cat/dog', async () => {
     const parrotRes = await request(app.getHttpServer())
       .post('/api/pets')
       .set('Authorization', `Bearer ${ownerAAccessToken}`)
-      .send({ name: 'Polly', species: 'Parrot' })
+      .send({ name: 'Polly', species: 'Parrot', gender: 'MALE' })
       .expect(201);
     const parrotId = data<{ _id: string }>(parrotRes)._id;
 
@@ -199,7 +241,7 @@ describe('Pet dating flow (e2e)', () => {
       const dogRes = await request(app.getHttpServer())
         .post('/api/pets')
         .set('Authorization', `Bearer ${ownerAAccessToken}`)
-        .send({ name: 'Dating Dog A', species: 'Dog' })
+        .send({ name: 'Dating Dog A', species: 'Dog', gender: 'MALE' })
         .expect(201);
       dogId = data<{ _id: string }>(dogRes)._id;
 
@@ -243,6 +285,98 @@ describe('Pet dating flow (e2e)', () => {
         .send({
           fromPetId: petBId,
           toPetId: dogId,
+          action: 'LIKE',
+          mode: 'BREEDING',
+        })
+        .expect(400);
+    });
+  });
+
+  describe('BREEDING mode is strictly opposite-gender', () => {
+    let sameGenderCatId: string;
+
+    it('owner B adds a second, same-gender (MALE) cat enabled for BREEDING', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/pets')
+        .set('Authorization', `Bearer ${ownerBAccessToken}`)
+        .send({ name: 'Dating Cat B2', species: 'Cat', gender: 'MALE' })
+        .expect(201);
+      sameGenderCatId = data<{ _id: string }>(res)._id;
+
+      await request(app.getHttpServer())
+        .post(`/api/pets/${sameGenderCatId}/dating-profile`)
+        .set('Authorization', `Bearer ${ownerBAccessToken}`)
+        .send({ modes: ['BREEDING'], photos: DATING_PHOTOS })
+        .expect(201);
+    });
+
+    it("owner A's (MALE) cat never sees the same-gender cat in its BREEDING pool", async () => {
+      const res = await request(app.getHttpServer())
+        .get('/api/dating/discover')
+        .set('Authorization', `Bearer ${ownerAAccessToken}`)
+        .query({ petId: petAId, mode: 'BREEDING' })
+        .expect(200);
+
+      const page = data<{ profiles: Array<{ petId: { _id: string } }> }>(res);
+      const candidateIds = page.profiles.map((p) => p.petId._id);
+
+      expect(candidateIds).not.toContain(sameGenderCatId);
+      // The opposite-gender cat B (FEMALE), same species, is still there.
+      expect(candidateIds).toContain(petBId);
+    });
+
+    it('a same-gender BREEDING swipe is rejected server-side, even called directly (not via discover)', async () => {
+      await request(app.getHttpServer())
+        .post('/api/dating/swipe')
+        .set('Authorization', `Bearer ${ownerAAccessToken}`)
+        .send({
+          fromPetId: petAId,
+          toPetId: sameGenderCatId,
+          action: 'LIKE',
+          mode: 'BREEDING',
+        })
+        .expect(400);
+    });
+  });
+
+  describe('two pets owned by the same person can never match each other', () => {
+    let secondCatOwnedByA: string;
+
+    it('owner A adds a second cat, opposite-gender to the first, enabled for both modes', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/pets')
+        .set('Authorization', `Bearer ${ownerAAccessToken}`)
+        .send({ name: 'Dating Cat A2', species: 'Cat', gender: 'FEMALE' })
+        .expect(201);
+      secondCatOwnedByA = data<{ _id: string }>(res)._id;
+
+      await request(app.getHttpServer())
+        .post(`/api/pets/${secondCatOwnedByA}/dating-profile`)
+        .set('Authorization', `Bearer ${ownerAAccessToken}`)
+        .send({ modes: ['PLAYDATE', 'BREEDING'], photos: DATING_PHOTOS })
+        .expect(201);
+    });
+
+    it("owner A's two pets never see each other in discovery", async () => {
+      const res = await request(app.getHttpServer())
+        .get('/api/dating/discover')
+        .set('Authorization', `Bearer ${ownerAAccessToken}`)
+        .query({ petId: petAId, mode: 'PLAYDATE' })
+        .expect(200);
+
+      const page = data<{ profiles: Array<{ petId: { _id: string } }> }>(res);
+      const candidateIds = page.profiles.map((p) => p.petId._id);
+
+      expect(candidateIds).not.toContain(secondCatOwnedByA);
+    });
+
+    it('swiping directly between two same-owner pets is rejected, even though genders/species/mode are otherwise compatible', async () => {
+      await request(app.getHttpServer())
+        .post('/api/dating/swipe')
+        .set('Authorization', `Bearer ${ownerAAccessToken}`)
+        .send({
+          fromPetId: petAId,
+          toPetId: secondCatOwnedByA,
           action: 'LIKE',
           mode: 'BREEDING',
         })
@@ -344,6 +478,96 @@ describe('Pet dating flow (e2e)', () => {
 
     const messages = data<Array<{ content: string }>>(res);
     expect(messages.some((m) => m.content.includes('playdate'))).toBe(true);
+  });
+
+  describe('real-time chat over the Socket.IO gateway (Phase 12)', () => {
+    it('a socket with no token is rejected', async () => {
+      const socket = io(socketBaseUrl, {
+        transports: ['websocket'],
+        forceNew: true,
+      });
+
+      await new Promise<void>((resolve) => {
+        socket.once('disconnect', () => resolve());
+        socket.once('connect_error', () => resolve());
+      });
+
+      expect(socket.connected).toBe(false);
+      socket.close();
+    });
+
+    it('a message sent over the socket is broadcast live to the other side, and persists to the REST history', async () => {
+      const socketA = await connectSocket(ownerAAccessToken);
+      const socketB = await connectSocket(ownerBAccessToken);
+
+      socketB.emit('joinMatch', { matchId });
+      await waitForEvent(socketB, 'joinedMatch');
+
+      const newMessagePromise = waitForEvent<{
+        matchId: string;
+        content: string;
+      }>(socketB, 'newMessage');
+
+      socketA.emit('sendMessage', {
+        matchId,
+        content: 'Sent live over the socket!',
+      });
+
+      const received = await newMessagePromise;
+      expect(received.matchId).toBe(matchId);
+      expect(received.content).toBe('Sent live over the socket!');
+
+      const res = await request(app.getHttpServer())
+        .get(`/api/dating/matches/${matchId}/messages`)
+        .set('Authorization', `Bearer ${ownerAAccessToken}`)
+        .expect(200);
+
+      const messages = data<Array<{ content: string }>>(res);
+      expect(
+        messages.some((m) => m.content === 'Sent live over the socket!'),
+      ).toBe(true);
+
+      socketA.close();
+      socketB.close();
+    });
+
+    it('a typing indicator reaches the other side but not the sender', async () => {
+      const socketA = await connectSocket(ownerAAccessToken);
+      const socketB = await connectSocket(ownerBAccessToken);
+
+      socketA.emit('joinMatch', { matchId });
+      socketB.emit('joinMatch', { matchId });
+      await waitForEvent(socketA, 'joinedMatch');
+      await waitForEvent(socketB, 'joinedMatch');
+
+      const typingPromise = waitForEvent<{ matchId: string }>(
+        socketB,
+        'typing',
+      );
+      socketA.emit('typing', { matchId });
+
+      const typingEvent = await typingPromise;
+      expect(typingEvent.matchId).toBe(matchId);
+
+      socketA.close();
+      socketB.close();
+    });
+
+    it("a socket cannot join a match it doesn't own a side of", async () => {
+      const intruder = await registerAndVerify(
+        'Socket Intruder',
+        `dating-socket-intruder-${runId}@example.com`,
+      );
+      const socket = await connectSocket(intruder.accessToken);
+
+      const errorPromise = waitForEvent<{ message: string }>(socket, 'error');
+      socket.emit('joinMatch', { matchId });
+
+      const error = await errorPromise;
+      expect(error.message).toBe('Match not found');
+
+      socket.close();
+    });
   });
 
   describe('identity verification + explicit per-match NID sharing (Phase 11)', () => {
@@ -544,6 +768,13 @@ describe('Pet dating flow (e2e)', () => {
     expect(data<Array<unknown>>(res).length).toBeGreaterThan(0);
   });
 
+  it('cannot delete a conversation that is still active — unmatch first', async () => {
+    await request(app.getHttpServer())
+      .post(`/api/dating/matches/${matchId}/delete`)
+      .set('Authorization', `Bearer ${ownerAAccessToken}`)
+      .expect(400);
+  });
+
   it('either side can unmatch, and a message can no longer be sent afterward', async () => {
     await request(app.getHttpServer())
       .post(`/api/dating/matches/${matchId}/unmatch`)
@@ -557,11 +788,107 @@ describe('Pet dating flow (e2e)', () => {
       .expect(400);
   });
 
+  it('the archived match still shows up (read-only) in both matches lists', async () => {
+    const resA = await request(app.getHttpServer())
+      .get('/api/dating/matches')
+      .set('Authorization', `Bearer ${ownerAAccessToken}`)
+      .expect(200);
+
+    const matchesA = data<Array<{ _id: string; status: string }>>(resA);
+    const archived = matchesA.find((m) => m._id === matchId);
+    expect(archived).toBeDefined();
+    expect(archived!.status).toBe('UNMATCHED');
+  });
+
+  describe('deleting the archived conversation (Phase 12)', () => {
+    it("owner A deletes it; it disappears from A's list but stays in B's", async () => {
+      await request(app.getHttpServer())
+        .post(`/api/dating/matches/${matchId}/delete`)
+        .set('Authorization', `Bearer ${ownerAAccessToken}`)
+        .expect(201);
+
+      const resA = await request(app.getHttpServer())
+        .get('/api/dating/matches')
+        .set('Authorization', `Bearer ${ownerAAccessToken}`)
+        .expect(200);
+      const matchesA = data<Array<{ _id: string }>>(resA);
+      expect(matchesA.some((m) => m._id === matchId)).toBe(false);
+
+      const resB = await request(app.getHttpServer())
+        .get('/api/dating/matches')
+        .set('Authorization', `Bearer ${ownerBAccessToken}`)
+        .expect(200);
+      const matchesB = data<Array<{ _id: string }>>(resB);
+      expect(matchesB.some((m) => m._id === matchId)).toBe(true);
+    });
+  });
+
+  let chatReportId: string;
+
+  it('owner B reports the conversation itself (not just the profile), attaching chat context', async () => {
+    const res = await request(app.getHttpServer())
+      .post('/api/dating/report')
+      .set('Authorization', `Bearer ${ownerBAccessToken}`)
+      .send({
+        targetPetId: petAId,
+        reason: 'Harassment in chat messages.',
+        matchId,
+      })
+      .expect(201);
+
+    expect(data<{ message: string }>(res).message).toBeDefined();
+  });
+
+  it('a report cannot attach a matchId whose other side is not the named targetPetId', async () => {
+    await request(app.getHttpServer())
+      .post('/api/dating/report')
+      .set('Authorization', `Bearer ${ownerBAccessToken}`)
+      .send({
+        targetPetId: petBId, // owner B's own pet, not the other side of the match
+        reason: 'Bogus context.',
+        matchId,
+      })
+      .expect(400);
+  });
+
+  it('admin can view the reported conversation on demand', async () => {
+    const listRes = await request(app.getHttpServer())
+      .get('/api/admin/dating/reports')
+      .set('Authorization', `Bearer ${adminAccessToken}`)
+      .query({ limit: 100 })
+      .expect(200);
+
+    const page = data<{
+      reports: Array<{ _id: string; matchId: string | null; reason: string }>;
+    }>(listRes);
+    const chatReport = page.reports.find(
+      (r) => r.reason === 'Harassment in chat messages.',
+    );
+    expect(chatReport).toBeDefined();
+    expect(chatReport!.matchId).toBeTruthy();
+    chatReportId = chatReport!._id;
+
+    const messagesRes = await request(app.getHttpServer())
+      .get(`/api/admin/dating/reports/${chatReportId}/messages`)
+      .set('Authorization', `Bearer ${adminAccessToken}`)
+      .expect(200);
+
+    const messages = data<Array<{ content: string }>>(messagesRes);
+    expect(messages.length).toBeGreaterThan(0);
+  });
+
+  it('a report filed without a matchId has no conversation to show admin', async () => {
+    await request(app.getHttpServer())
+      .get(`/api/admin/dating/reports/${reportId}/messages`)
+      .set('Authorization', `Bearer ${adminAccessToken}`)
+      .expect(400);
+  });
+
   it('every dating action taken above is recorded in the audit log', async () => {
     const res = await request(app.getHttpServer())
       .get('/api/activity')
       .set('Authorization', `Bearer ${adminAccessToken}`)
-      .query({ limit: 100 })
+      .query({ limit: 200 })
       .expect(200);
 
     const page = data<{ activities: Array<{ action: string }> }>(res);
@@ -575,6 +902,7 @@ describe('Pet dating flow (e2e)', () => {
         'dating.identity-verification.approved',
         'dating.nid.shared',
         'dating.nid.viewed',
+        'dating.chat.viewed',
       ]),
     );
   });

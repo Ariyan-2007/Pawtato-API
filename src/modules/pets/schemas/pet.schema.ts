@@ -1,6 +1,8 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Types } from 'mongoose';
 
+import { PetGender } from '../../../common/enums/pet-gender.enum';
+
 export type PetDocument = HydratedDocument<Pet>;
 
 @Schema({
@@ -31,10 +33,15 @@ export class Pet {
   })
   breed!: string;
 
+  // Mandatory (Phase 12) — Breeding-mode dating match compatibility is
+  // strictly opposite-gender, which is only enforceable if every pet has a
+  // real, structured sex on file.
   @Prop({
-    default: '',
+    type: String,
+    enum: PetGender,
+    required: true,
   })
-  gender!: string;
+  gender!: PetGender;
 
   @Prop({
     default: '',

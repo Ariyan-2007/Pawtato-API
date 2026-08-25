@@ -234,6 +234,10 @@ export class AdminService {
     return this.datingService.adminDeactivateProfile(actorId, petId);
   }
 
+  async datingReportMessages(actorId: string, reportId: string) {
+    return this.datingService.adminGetReportMessages(actorId, reportId);
+  }
+
   async identityVerifications(query: AdminIdentityVerificationQueryDto) {
     return this.identityVerificationService.adminList(query);
   }

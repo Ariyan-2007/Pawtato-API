@@ -160,7 +160,7 @@ describe('Admin, audit & abuse handling (e2e)', () => {
     const petRes = await request(app.getHttpServer())
       .post('/api/pets')
       .set('Authorization', `Bearer ${ownerAccessToken}`)
-      .send({ name: 'Milo', species: 'Cat' })
+      .send({ name: 'Milo', species: 'Cat', gender: 'MALE' })
       .expect(201);
 
     petId = data<{ _id: string }>(petRes)._id;

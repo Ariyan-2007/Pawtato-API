@@ -6,6 +6,7 @@ import { PetDatingProfileController } from './pet-dating-profile.controller';
 import { IdentityVerificationController } from './identity-verification.controller';
 import { DatingService } from './dating.service';
 import { IdentityVerificationService } from './identity-verification.service';
+import { DatingGateway } from './dating.gateway';
 
 import {
   PetDatingProfile,
@@ -27,6 +28,7 @@ import { PetsModule } from '../pets/pets.module';
 import { MedicalModule } from '../medical/medical.module';
 import { VaccinationsModule } from '../vaccinations/vaccinations.module';
 import { ActivityModule } from '../activity/activity.module';
+import { AuthModule } from '../auth/auth.module';
 
 @Module({
   imports: [
@@ -43,6 +45,7 @@ import { ActivityModule } from '../activity/activity.module';
     MedicalModule,
     VaccinationsModule,
     ActivityModule,
+    AuthModule,
   ],
 
   controllers: [
@@ -51,7 +54,7 @@ import { ActivityModule } from '../activity/activity.module';
     IdentityVerificationController,
   ],
 
-  providers: [DatingService, IdentityVerificationService],
+  providers: [DatingService, IdentityVerificationService, DatingGateway],
 
   exports: [DatingService, IdentityVerificationService],
 })

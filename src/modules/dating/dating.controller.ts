@@ -154,6 +154,32 @@ export class DatingController {
   }
 
   @ApiOperation({
+    summary:
+      "Delete a conversation (hides it from the caller's own matches/messages view)",
+    description:
+      'Requires the match to already be unmatched — unmatch first. Never deletes the underlying ' +
+      "messages: the other side (if they haven't also deleted it) still sees the conversation, " +
+      'and a filed report can still be reviewed with full chat context.',
+  })
+  @ApiParam({ name: 'matchId', description: 'Match ID' })
+  @ApiResponse({ status: 201, description: 'Conversation deleted.' })
+  @ApiResponse({
+    status: 400,
+    description: 'The match is still active — unmatch before deleting.',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Match not found, or the caller owns neither side.',
+  })
+  @Post('matches/:matchId/delete')
+  deleteChat(
+    @CurrentUser() user: JwtPayload,
+    @Param('matchId', ParseMongoIdPipe) matchId: string,
+  ) {
+    return this.datingService.deleteChat(user.sub, matchId);
+  }
+
+  @ApiOperation({
     summary: "Share the caller's identity (NID) within a specific match",
     description:
       'Explicit, per-match consent (not automatic on match) — requires the caller to be ' +
@@ -208,11 +234,22 @@ export class DatingController {
     return this.datingService.getNidExchange(user.sub, matchId);
   }
 
-  @ApiOperation({ summary: "Report a pet's dating profile" })
+  @ApiOperation({
+    summary: "Report a pet's dating profile, optionally with chat context",
+    description:
+      'Set `matchId` when reporting from inside a conversation (e.g. harassment in messages) so ' +
+      'admin can review the actual chat, not just the profile. The caller must own one side of ' +
+      'that match, and targetPetId must be the other side.',
+  })
   @ApiResponse({ status: 201, description: 'Report submitted.' })
   @ApiResponse({
     status: 404,
-    description: 'Pet not found, or it has no dating profile.',
+    description:
+      'Pet not found, it has no dating profile, or (with matchId) the match was not found / the caller owns neither side.',
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'targetPetId is not the other side of the given matchId.',
   })
   @Post('report')
   report(@CurrentUser() user: JwtPayload, @Body() dto: CreateDatingReportDto) {

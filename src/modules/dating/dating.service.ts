@@ -4,6 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Model, Types } from 'mongoose';
 
 import {
@@ -34,6 +35,8 @@ import { MedicalService } from '../medical/medical.service';
 import { VaccinationsService } from '../vaccinations/vaccinations.service';
 import { ActivityService } from '../activity/activity.service';
 import { IdentityVerificationService } from './identity-verification.service';
+import { PetGender } from '../../common/enums/pet-gender.enum';
+import { DOMAIN_EVENTS } from '../../common/events/domain-events';
 
 // Only cats and dogs may opt into dating — Pet.species is a free-text field
 // platform-wide (no enum enforced there), so this allow-list is local to
@@ -62,6 +65,10 @@ function canonicalPair(
   return a.toString() < b.toString() ? [a, b] : [b, a];
 }
 
+function oppositeGender(gender: PetGender): PetGender {
+  return gender === PetGender.MALE ? PetGender.FEMALE : PetGender.MALE;
+}
+
 @Injectable()
 export class DatingService {
   constructor(
@@ -81,6 +88,7 @@ export class DatingService {
     private readonly vaccinationsService: VaccinationsService,
     private readonly activityService: ActivityService,
     private readonly identityVerificationService: IdentityVerificationService,
+    private readonly eventEmitter: EventEmitter2,
   ) {}
 
   private assertDatableSpecies(species: string) {
@@ -306,14 +314,17 @@ export class DatingService {
       isActive: true,
     };
 
-    // BREEDING is species-restricted; PLAYDATE is universal — the profile
-    // filter alone (modes + isActive) is enough there, since species
+    // BREEDING is species-restricted AND strictly opposite-gender (Phase 12
+    // — same-gender pets are never shown to each other in the breeding
+    // pool, regardless of species match); PLAYDATE is universal — the
+    // profile filter alone (modes + isActive) is enough there, since species
     // eligibility was already enforced once at profile-creation time.
     if (mode === DatingMode.BREEDING) {
-      const sameSpeciesPetIds = await this.petsService.findIdsBySpecies(
+      const eligiblePetIds = await this.petsService.findIdsBySpeciesAndGender(
         pet.species,
+        oppositeGender(pet.gender),
       );
-      const eligible = sameSpeciesPetIds.filter((id) => !excludeIds.has(id));
+      const eligible = eligiblePetIds.filter((id) => !excludeIds.has(id));
       profileFilter.petId = {
         $in: eligible.map((id) => new Types.ObjectId(id)),
       };
@@ -405,6 +416,17 @@ export class DatingService {
       throw new NotFoundException('Pet not found');
     }
 
+    // Two pets owned by the same person must never be able to match each
+    // other — discover() already excludes the caller's own pets from the
+    // candidate pool, but a client could still call swipe() directly with a
+    // toPetId it never got from discover(), so this is re-checked here
+    // server-side rather than trusted to have come through discover() first.
+    if (extractOwnerId(toPet.owner) === ownerId) {
+      throw new BadRequestException(
+        'A pet cannot match with another pet owned by the same person',
+      );
+    }
+
     const [fromProfile, toProfile] = await Promise.all([
       this.profileModel.findOne({ petId: fromPet._id }),
       this.profileModel.findOne({ petId: toPet._id }),
@@ -432,17 +454,25 @@ export class DatingService {
       );
     }
 
-    // BREEDING is species-restricted; PLAYDATE is universal — mirrors
-    // discover()'s pool rule exactly, re-checked here since a client is
-    // never trusted to have honored discover()'s filtering.
-    if (
-      dto.mode === DatingMode.BREEDING &&
-      fromPet.species.trim().toLowerCase() !==
+    // BREEDING is species-restricted and strictly opposite-gender; PLAYDATE
+    // is universal — mirrors discover()'s pool rule exactly, re-checked here
+    // since a client is never trusted to have honored discover()'s
+    // filtering.
+    if (dto.mode === DatingMode.BREEDING) {
+      if (
+        fromPet.species.trim().toLowerCase() !==
         toPet.species.trim().toLowerCase()
-    ) {
-      throw new BadRequestException(
-        'BREEDING matches must be the same species',
-      );
+      ) {
+        throw new BadRequestException(
+          'BREEDING matches must be the same species',
+        );
+      }
+
+      if (fromPet.gender === toPet.gender) {
+        throw new BadRequestException(
+          'BREEDING matches must be opposite genders',
+        );
+      }
     }
 
     let swipe: SwipeDocument;
@@ -503,6 +533,17 @@ export class DatingService {
       match = existing;
     }
 
+    const fromIsA = match.petAId.equals(fromPet._id);
+    const toOwnerId = extractOwnerId(toPet.owner);
+
+    this.eventEmitter.emit(DOMAIN_EVENTS.DATING_MATCH_CREATED, {
+      matchId: match._id.toString(),
+      petAId: match.petAId.toString(),
+      petBId: match.petBId.toString(),
+      ownerAId: fromIsA ? ownerId : toOwnerId,
+      ownerBId: fromIsA ? toOwnerId : ownerId,
+    });
+
     return { swipe, match };
   }
 
@@ -513,8 +554,13 @@ export class DatingService {
 
     const matches = await this.matchModel
       .find({
-        status: MatchStatus.ACTIVE,
         $or: [{ petAId: { $in: ownPetIds } }, { petBId: { $in: ownPetIds } }],
+        // Active matches always show; an unmatched (archived) one still
+        // shows too, unless the caller has explicitly deleted it (see
+        // deleteChat()) — a deleted conversation drops out of the list for
+        // that user only, the other side (if they haven't also deleted it)
+        // still sees it.
+        deletedBy: { $ne: new Types.ObjectId(ownerId) },
       })
       .populate('petAId', 'name species breed profileImage')
       .populate('petBId', 'name species breed profileImage')
@@ -577,6 +623,33 @@ export class DatingService {
     }
   }
 
+  // Public entry point for DatingGateway (Phase 12) — a socket trying to
+  // join a match's room needs the exact same IDOR-safe ownership check
+  // every REST match-scoped endpoint already gets, without duplicating the
+  // logic. Throws NotFoundException on failure, same as the REST path.
+  async assertCanAccessMatch(ownerId: string, matchId: string) {
+    const match = await this.getMatchOrThrow(matchId);
+    await this.assertOwnsSideOfMatch(ownerId, match);
+  }
+
+  // Batched owner lookup for a match's two sides — used to address the
+  // DATING_MESSAGE_SENT/DATING_MATCH_UNMATCHED events at both owners'
+  // personal socket rooms (see DatingGateway), not just the match room,
+  // since the recipient may not have that match room open at all.
+  private async resolveMatchOwners(
+    match: MatchDocument,
+  ): Promise<{ ownerAId: string; ownerBId: string }> {
+    const ownerMap = await this.petsService.findOwnersForPets([
+      match.petAId.toString(),
+      match.petBId.toString(),
+    ]);
+
+    return {
+      ownerAId: ownerMap.get(match.petAId.toString()) ?? '',
+      ownerBId: ownerMap.get(match.petBId.toString()) ?? '',
+    };
+  }
+
   async listMessages(ownerId: string, matchId: string) {
     const match = await this.getMatchOrThrow(matchId);
     await this.assertOwnsSideOfMatch(ownerId, match);
@@ -594,21 +667,87 @@ export class DatingService {
       throw new BadRequestException('This match has ended');
     }
 
-    return this.messageModel.create({
+    const message = await this.messageModel.create({
       matchId: match._id,
       senderUserId: new Types.ObjectId(ownerId),
       content: dto.content,
     });
+
+    // Signals the match's Socket.IO room (DatingGateway) so the other side
+    // sees this instantly, whether it was sent over the socket or, as here,
+    // the plain REST endpoint — see the DOMAIN_EVENTS note on why this stays
+    // decoupled from the gateway rather than DatingService depending on it.
+    const { ownerAId, ownerBId } = await this.resolveMatchOwners(match);
+
+    this.eventEmitter.emit(DOMAIN_EVENTS.DATING_MESSAGE_SENT, {
+      matchId: match._id.toString(),
+      messageId: message._id.toString(),
+      senderUserId: ownerId,
+      content: message.content,
+      createdAt: (message as unknown as { createdAt: Date }).createdAt,
+      ownerAId,
+      ownerBId,
+    });
+
+    return message;
   }
 
   async unmatch(ownerId: string, matchId: string) {
     const match = await this.getMatchOrThrow(matchId);
     await this.assertOwnsSideOfMatch(ownerId, match);
 
+    if (match.status === MatchStatus.UNMATCHED) {
+      return { message: 'Already unmatched' };
+    }
+
     match.status = MatchStatus.UNMATCHED;
+    match.unmatchedBy = new Types.ObjectId(ownerId);
+    match.unmatchedAt = new Date();
     await match.save();
 
+    // Archives the chat for both sides: no new messages can be sent (see
+    // sendMessage()'s ACTIVE check) but the full history stays readable
+    // (see listMessages()) — this event just tells any open socket
+    // connection to reflect that immediately (e.g. disable the composer,
+    // show "This match has ended").
+    const { ownerAId, ownerBId } = await this.resolveMatchOwners(match);
+
+    this.eventEmitter.emit(DOMAIN_EVENTS.DATING_MATCH_UNMATCHED, {
+      matchId: match._id.toString(),
+      petAId: match.petAId.toString(),
+      petBId: match.petBId.toString(),
+      unmatchedBy: ownerId,
+      ownerAId,
+      ownerBId,
+    });
+
     return { message: 'Unmatched successfully' };
+  }
+
+  // "Delete conversation" (Phase 12) — a per-side hide, not a hard delete.
+  // Only allowed once the match is already UNMATCHED (deleting an active
+  // conversation out from under the other party isn't allowed — unmatch
+  // first). The underlying Match/Message documents are always kept, even
+  // once both sides have deleted, so a DatingReport referencing this match
+  // can still be reviewed with full context later.
+  async deleteChat(ownerId: string, matchId: string) {
+    const match = await this.getMatchOrThrow(matchId);
+    await this.assertOwnsSideOfMatch(ownerId, match);
+
+    if (match.status !== MatchStatus.UNMATCHED) {
+      throw new BadRequestException(
+        'Unmatch before deleting this conversation',
+      );
+    }
+
+    const userObjectId = new Types.ObjectId(ownerId);
+
+    if (!match.deletedBy.some((id) => id.equals(userObjectId))) {
+      match.deletedBy.push(userObjectId);
+      await match.save();
+    }
+
+    return { message: 'Conversation deleted' };
   }
 
   // Explicit per-match consent (decided 2026-08-25 — see PAWTATO_ROADMAP.md
@@ -704,20 +843,79 @@ export class DatingService {
       throw new NotFoundException('This pet has no dating profile to report');
     }
 
+    let matchObjectId: Types.ObjectId | null = null;
+
+    // Reporting from inside a chat: the caller must own one side of the
+    // match, and the reported pet must genuinely be the *other* side — not
+    // just any pet that happens to appear in the match, which would let a
+    // reporter attach match context while naming their own pet as the
+    // target.
+    if (dto.matchId) {
+      const match = await this.getMatchOrThrow(dto.matchId);
+      await this.assertOwnsSideOfMatch(reporterId, match);
+
+      const [petA, petB] = await Promise.all([
+        this.petsService.findByIdAdmin(match.petAId.toString()),
+        this.petsService.findByIdAdmin(match.petBId.toString()),
+      ]);
+
+      const ownsA = petA && extractOwnerId(petA.owner) === reporterId;
+      const otherPet = ownsA ? petB : petA;
+
+      if (!otherPet || !otherPet._id.equals(targetPet._id)) {
+        throw new BadRequestException(
+          'targetPetId must be the other side of this match',
+        );
+      }
+
+      matchObjectId = match._id;
+    }
+
     const report = await this.datingReportModel.create({
       reporterUserId: new Types.ObjectId(reporterId),
       targetPetId: targetPet._id,
       reason: dto.reason,
+      matchId: matchObjectId,
     });
 
     await this.activityService.log(
       reporterId,
       'dating.report.created',
       report._id.toString(),
-      { targetPetId: dto.targetPetId },
+      { targetPetId: dto.targetPetId, matchId: dto.matchId ?? null },
     );
 
     return { message: 'Report submitted. Our team will review it.' };
+  }
+
+  // Admin-only, on-demand chat context for a filed report — mirrors the NID
+  // signed-image pattern exactly (never inline in the report list, fetched
+  // only when an admin actually opens it, and audit-logged every time).
+  // Only meaningful for a report that was filed with matchId set; a
+  // profile-only report has no conversation to show.
+  async adminGetReportMessages(actorId: string, reportId: string) {
+    const report = await this.datingReportModel.findById(reportId);
+
+    if (!report) {
+      throw new NotFoundException('Dating report not found');
+    }
+
+    if (!report.matchId) {
+      throw new BadRequestException(
+        'This report has no associated conversation',
+      );
+    }
+
+    const messages = await this.messageModel
+      .find({ matchId: report.matchId })
+      .sort({ createdAt: 1 });
+
+    await this.activityService.log(actorId, 'dating.chat.viewed', reportId, {
+      matchId: report.matchId.toString(),
+      context: 'report-review',
+    });
+
+    return messages;
   }
 
   // --- Admin ---
