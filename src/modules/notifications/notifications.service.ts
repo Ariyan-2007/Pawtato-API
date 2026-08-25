@@ -91,14 +91,18 @@ export class NotificationsService {
   }
 
   async findForUser(userId: string, query: NotificationQueryDto) {
-    const { page, limit, unreadOnly } = query;
+    const { page, limit, unreadOnly, type } = query;
 
-    const filter: { user: Types.ObjectId; readAt?: null } = {
+    const filter: { user: Types.ObjectId; readAt?: null; type?: string } = {
       user: new Types.ObjectId(userId),
     };
 
     if (unreadOnly) {
       filter.readAt = null;
+    }
+
+    if (type) {
+      filter.type = type;
     }
 
     const total = await this.notificationModel.countDocuments(filter);

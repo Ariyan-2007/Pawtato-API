@@ -109,6 +109,12 @@ export interface DatingMatchCreatedEvent {
   // moment a match is created.
   ownerAId: string;
   ownerBId: string;
+  // Names at the moment of matching — lets the notifications listener
+  // render "<your pet> matched with <their pet>!" for each side without
+  // reaching back into PetsService (same "emitter builds the full payload"
+  // principle as every other event here).
+  petAName: string;
+  petBName: string;
 }
 
 export interface DatingMessageSentEvent {

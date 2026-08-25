@@ -3,6 +3,7 @@ import { OnEvent } from '@nestjs/event-emitter';
 
 import { DOMAIN_EVENTS } from '../../../common/events/domain-events';
 import type {
+  DatingMatchCreatedEvent,
   FoundReportCreatedEvent,
   PetMarkedFoundEvent,
   PetMarkedLostEvent,
@@ -118,6 +119,34 @@ export class DomainEventsListener {
   async onVaccinationReminderDue(event: VaccinationReminderDueEvent) {
     await this.handle(DOMAIN_EVENTS.VACCINATION_REMINDER_DUE, event.ownerId, {
       ...event,
+    });
+  }
+
+  // DatingService.swipe() only ever emits this once per genuinely new match
+  // (a race-loser or a re-swipe on an already-matched pair resolves to the
+  // same Match without re-emitting — see the comment there), so "one event"
+  // already means "one notification per side" here; no separate idempotency
+  // check is needed on this end. One notification is created per owner,
+  // each phrased from that owner's own pet's perspective, so both sides see
+  // this in their Notifications list and — since it's the same unread
+  // in-app Notification the rest of the app already uses — the Matchup
+  // section can surface the same "new match" indicator by checking for
+  // unread notifications of this type (`GET /notifications?type=dating.match-created&unreadOnly=true`)
+  // rather than a parallel mechanism.
+  @OnEvent(DOMAIN_EVENTS.DATING_MATCH_CREATED)
+  async onDatingMatchCreated(event: DatingMatchCreatedEvent) {
+    await this.handle(DOMAIN_EVENTS.DATING_MATCH_CREATED, event.ownerAId, {
+      ...event,
+      petId: event.petAId,
+      petName: event.petAName,
+      otherPetName: event.petBName,
+    });
+
+    await this.handle(DOMAIN_EVENTS.DATING_MATCH_CREATED, event.ownerBId, {
+      ...event,
+      petId: event.petBId,
+      petName: event.petBName,
+      otherPetName: event.petAName,
     });
   }
 }

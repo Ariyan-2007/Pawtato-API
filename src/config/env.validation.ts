@@ -47,4 +47,6 @@ export const envValidationSchema = Joi.object({
   }),
   S3_PUBLIC_URL: Joi.string().uri().optional(),
   S3_FORCE_PATH_STYLE: Joi.string().valid('true', 'false').optional(),
+
+  DATING_POOL_RESET_DAYS: Joi.number().integer().min(1).default(3),
 });
