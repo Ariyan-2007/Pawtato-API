@@ -25,6 +25,7 @@ import { DiscoverQueryDto } from './dto/discover-query.dto';
 import { SwipeDto } from './dto/swipe.dto';
 import { CreateMessageDto } from './dto/create-message.dto';
 import { CreateDatingReportDto } from './dto/create-dating-report.dto';
+import { DatingChatNotificationService } from './dating-chat-notification.service';
 import type { AdminDatingReportQueryDto } from '../admin/dto/admin-dating-report-query.dto';
 import { DatingMode } from '../../common/enums/dating-mode.enum';
 import { SwipeAction } from '../../common/enums/swipe-action.enum';
@@ -89,6 +90,7 @@ export class DatingService {
     private readonly vaccinationsService: VaccinationsService,
     private readonly activityService: ActivityService,
     private readonly identityVerificationService: IdentityVerificationService,
+    private readonly datingChatNotificationService: DatingChatNotificationService,
     private readonly eventEmitter: EventEmitter2,
     private readonly configService: ConfigService,
   ) {}
@@ -795,9 +797,30 @@ export class DatingService {
       createdAt: (message as unknown as { createdAt: Date }).createdAt,
       ownerAId,
       ownerBId,
+      petAId: match.petAId.toString(),
+      petBId: match.petBId.toString(),
     });
 
     return message;
+  }
+
+  // "Opening the chat" (see PAWTATO_FRONTEND_BLUEPRINT.md's Dating Chat
+  // Notifications contract) — deletes every currently-unread
+  // DatingChatNotification for this caller in this conversation. Same
+  // IDOR-safe ownership check as every other matches/:matchId/... action;
+  // the actual delete is delegated to DatingChatNotificationService, which
+  // owns that collection exclusively.
+  async markChatRead(ownerId: string, matchId: string) {
+    const match = await this.getMatchOrThrow(matchId);
+    await this.assertOwnsSideOfMatch(ownerId, match);
+
+    const { deletedCount } =
+      await this.datingChatNotificationService.markConversationRead(
+        ownerId,
+        matchId,
+      );
+
+    return { message: 'Conversation marked as read', deletedCount };
   }
 
   async unmatch(ownerId: string, matchId: string) {
@@ -1134,6 +1157,12 @@ export class DatingService {
     await this.datingReportModel.deleteMany({
       targetPetId: { $in: objectIds },
     });
+    // deleteAllForMatches covers notifications for the *other* pet in each
+    // deleted match (not itself in petIds); deleteAllForPets covers any
+    // stray row referencing these petIds directly (belt-and-braces — every
+    // row should already be caught by one match in matchIds above).
+    await this.datingChatNotificationService.deleteAllForMatches(matchIds);
+    await this.datingChatNotificationService.deleteAllForPets(petIds);
 
     const result = await this.profileModel.deleteMany({
       petId: { $in: objectIds },

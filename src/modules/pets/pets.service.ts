@@ -3,6 +3,10 @@ import { InjectModel } from '@nestjs/mongoose';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { QueryFilter, Model, Types } from 'mongoose';
 import { Pet, PetDocument } from './schemas/pet.schema';
+import {
+  PetCaretaker,
+  PetCaretakerDocument,
+} from '../caretakers/schemas/pet-caretaker.schema';
 import { CreatePetDto } from './dto/create-pet.dto';
 import { UpdatePetDto } from './dto/update-pet.dto';
 import { AdminPetQueryDto } from '../admin/dto/admin-pet-query.dto';
@@ -22,6 +26,15 @@ export class PetsService {
   constructor(
     @InjectModel(Pet.name)
     private readonly petModel: Model<PetDocument>,
+
+    // Read-only, for findAccessiblePet() below — PetsModule registers this
+    // schema locally rather than importing CaretakersModule, the same
+    // cross-module-schema-without-a-module-import pattern UsersModule/
+    // PublicModule already use for Pet itself (avoids a real circular
+    // dependency: CaretakersModule needs PetsService for its own ownership
+    // checks, so PetsModule importing CaretakersModule back would cycle).
+    @InjectModel(PetCaretaker.name)
+    private readonly caretakerModel: Model<PetCaretakerDocument>,
 
     private readonly eventEmitter: EventEmitter2,
     private readonly activityService: ActivityService,
@@ -49,13 +62,39 @@ export class PetsService {
       });
   }
 
-  async findOne(ownerId: string, petId: string) {
-    const pet = await this.petModel.findOne({
-      _id: petId,
-      owner: new Types.ObjectId(ownerId),
-    });
+  async findOne(userId: string, petId: string) {
+    return this.findAccessiblePet(userId, petId);
+  }
+
+  // Owner OR an active caretaker (Phase 15 — shared pet access) may access
+  // via this check; IDOR-safe the same way as findOwnedPet — a caller who
+  // is neither gets an identical NotFoundException, never a distinguishing
+  // 403, so an unauthorized caller can't distinguish "doesn't exist" from
+  // "exists but isn't yours." Used for read/caretaking-relevant actions:
+  // viewing the pet, reporting it lost/found, and (via MedicalService/
+  // VaccinationsService/ScansService/FoundReportsService, which all call
+  // this too) medical/vaccination records and scan/found-report history.
+  // Pet-identity-changing actions (update/photo/delete) and the tags/dating
+  // modules remain strictly owner-only via findOwnedPet, unchanged — see
+  // PAWTATO_ROADMAP.md's Phase 15 section for the full scope-boundary
+  // reasoning behind exactly where this line is drawn.
+  async findAccessiblePet(userId: string, petId: string) {
+    const pet = await this.petModel.findById(petId);
 
     if (!pet) {
+      throw new NotFoundException('Pet not found');
+    }
+
+    if (pet.owner.toString() === userId) {
+      return pet;
+    }
+
+    const isCaretaker = await this.caretakerModel.exists({
+      petId: pet._id,
+      userId: new Types.ObjectId(userId),
+    });
+
+    if (!isCaretaker) {
       throw new NotFoundException('Pet not found');
     }
 
@@ -175,16 +214,28 @@ export class PetsService {
     };
   }
 
-  async reportLost(ownerId: string, petId: string, dto: ReportLostDto) {
-    const pet = await this.petModel.findOneAndUpdate(
+  // `userId` is the *acting* user — the owner or, since Phase 15, an
+  // authorized caretaker (e.g. a pet-sitter reporting an escape on their
+  // watch) — never assumed to be the owner. The update itself still targets
+  // `_id` alone (a caretaker isn't `Pet.owner`), and the resulting
+  // notification/email always goes to the pet's real owner
+  // (`pet.owner`, re-read from the updated document), never the acting
+  // caretaker — only the audit-log entry records who actually did it.
+  async reportLost(userId: string, petId: string, dto: ReportLostDto) {
+    await this.findAccessiblePet(userId, petId);
+
+    const { lat, lng, ...rest } = dto;
+
+    const pet = await this.petModel.findByIdAndUpdate(
+      petId,
       {
-        _id: petId,
-        owner: new Types.ObjectId(ownerId),
-      },
-      {
-        ...dto,
+        ...rest,
         isLost: true,
         lostDate: new Date(),
+        lastSeenGeo:
+          lat != null && lng != null
+            ? { type: 'Point' as const, coordinates: [lng, lat] as const }
+            : undefined,
       },
       {
         new: true,
@@ -195,10 +246,14 @@ export class PetsService {
       throw new NotFoundException('Pet not found');
     }
 
-    await this.emitOwnerEvent(DOMAIN_EVENTS.PET_MARKED_LOST, ownerId, pet);
+    await this.emitOwnerEvent(
+      DOMAIN_EVENTS.PET_MARKED_LOST,
+      pet.owner.toString(),
+      pet,
+    );
 
     await this.activityService.log(
-      ownerId,
+      userId,
       DOMAIN_EVENTS.PET_MARKED_LOST,
       petId,
       { petName: pet.name },
@@ -207,16 +262,16 @@ export class PetsService {
     return pet;
   }
 
-  async reportFound(ownerId: string, petId: string) {
-    const pet = await this.petModel.findOneAndUpdate(
-      {
-        _id: petId,
-        owner: new Types.ObjectId(ownerId),
-      },
+  async reportFound(userId: string, petId: string) {
+    await this.findAccessiblePet(userId, petId);
+
+    const pet = await this.petModel.findByIdAndUpdate(
+      petId,
       {
         isLost: false,
         lostDate: undefined,
         lastSeenLocation: undefined,
+        lastSeenGeo: undefined,
         lostDescription: undefined,
         reward: undefined,
       },
@@ -229,10 +284,14 @@ export class PetsService {
       throw new NotFoundException('Pet not found');
     }
 
-    await this.emitOwnerEvent(DOMAIN_EVENTS.PET_MARKED_FOUND, ownerId, pet);
+    await this.emitOwnerEvent(
+      DOMAIN_EVENTS.PET_MARKED_FOUND,
+      pet.owner.toString(),
+      pet,
+    );
 
     await this.activityService.log(
-      ownerId,
+      userId,
       DOMAIN_EVENTS.PET_MARKED_FOUND,
       petId,
       { petName: pet.name },
@@ -250,13 +309,14 @@ export class PetsService {
     pet: PetDocument,
   ) {
     try {
-      await pet.populate('owner', 'email');
+      await pet.populate('owner', 'email phone');
 
-      const ownerEmail = (pet.owner as unknown as User).email;
+      const owner = pet.owner as unknown as User;
 
       this.eventEmitter.emit(event, {
         ownerId,
-        ownerEmail,
+        ownerEmail: owner.email,
+        ownerPhone: owner.phone || undefined,
         petId: pet._id.toString(),
         petName: pet.name,
       });
@@ -377,7 +437,7 @@ export class PetsService {
   }
 
   async findWithOwner(id: string) {
-    return this.petModel.findById(id).populate('owner', 'fullName email');
+    return this.petModel.findById(id).populate('owner', 'fullName email phone');
   }
 
   async recoverPet(id: string) {
@@ -387,6 +447,7 @@ export class PetsService {
         isLost: false,
         lostDate: null,
         lastSeenLocation: null,
+        lastSeenGeo: null,
         lostDescription: null,
         reward: null,
       },

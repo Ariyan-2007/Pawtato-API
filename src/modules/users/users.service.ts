@@ -56,6 +56,16 @@ export class UsersService {
       .select('+password +otpHash +otpAttempts');
   }
 
+  // Safe-to-return lookup for cross-user references (e.g. Phase 15's "add a
+  // caretaker by email") — deliberately does NOT use findByEmail()'s
+  // '+password +otpHash +otpAttempts' pattern, relying instead on those
+  // fields' own `select: false` schema default to stay excluded. Only the
+  // three fields a caller ever needs to identify/display another user are
+  // selected explicitly.
+  async findByEmailForLookup(email: string) {
+    return this.userModel.findOne({ email }).select('_id fullName email');
+  }
+
   async setOtp(userId: string, otpHash: string, expiresAt: Date) {
     return this.userModel.findByIdAndUpdate(userId, {
       otpHash,

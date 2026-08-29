@@ -6,7 +6,9 @@ import { Types } from 'mongoose';
 
 import { NotificationsService } from './notifications.service';
 import { Notification } from './schemas/notification.schema';
+import { DeviceToken } from './schemas/device-token.schema';
 import { NotificationPriority } from './enums/notification-priority.enum';
+import { DevicePlatform } from '../../common/enums/device-platform.enum';
 
 describe('NotificationsService', () => {
   let service: NotificationsService;
@@ -19,6 +21,11 @@ describe('NotificationsService', () => {
     findOneAndDelete: jest.Mock;
     updateMany: jest.Mock;
     deleteMany: jest.Mock;
+  };
+  let deviceTokenModel: {
+    findOneAndUpdate: jest.Mock;
+    findOneAndDelete: jest.Mock;
+    find: jest.Mock;
   };
 
   const userId = new Types.ObjectId().toString();
@@ -34,6 +41,11 @@ describe('NotificationsService', () => {
       updateMany: jest.fn(),
       deleteMany: jest.fn(),
     };
+    deviceTokenModel = {
+      findOneAndUpdate: jest.fn(),
+      findOneAndDelete: jest.fn(),
+      find: jest.fn(),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -42,6 +54,10 @@ describe('NotificationsService', () => {
         {
           provide: getModelToken(Notification.name),
           useValue: notificationModel,
+        },
+        {
+          provide: getModelToken(DeviceToken.name),
+          useValue: deviceTokenModel,
         },
       ],
     }).compile();
@@ -195,6 +211,56 @@ describe('NotificationsService', () => {
           priority: NotificationPriority.STALE_MISSING,
         }),
       );
+    });
+  });
+
+  describe('registerDeviceToken', () => {
+    it('upserts on the token alone, so a token moves to its current owner', async () => {
+      deviceTokenModel.findOneAndUpdate.mockResolvedValue({ token: 'abc' });
+
+      await service.registerDeviceToken(userId, {
+        token: 'abc',
+        platform: DevicePlatform.ANDROID,
+      });
+
+      expect(deviceTokenModel.findOneAndUpdate).toHaveBeenCalledWith(
+        { token: 'abc' },
+        {
+          userId: expect.any(Types.ObjectId) as Types.ObjectId,
+          platform: DevicePlatform.ANDROID,
+        },
+        { upsert: true, new: true },
+      );
+    });
+  });
+
+  describe('unregisterDeviceToken', () => {
+    it('throws NotFoundException for a token not owned by the caller', async () => {
+      deviceTokenModel.findOneAndDelete.mockResolvedValue(null);
+
+      await expect(
+        service.unregisterDeviceToken(userId, 'abc'),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('removes the token when owned by the caller', async () => {
+      deviceTokenModel.findOneAndDelete.mockResolvedValue({ token: 'abc' });
+
+      await expect(
+        service.unregisterDeviceToken(userId, 'abc'),
+      ).resolves.toEqual({ message: 'Device token removed' });
+    });
+  });
+
+  describe('getDeviceTokens', () => {
+    it('scopes the lookup to the caller', async () => {
+      deviceTokenModel.find.mockResolvedValue([]);
+
+      await service.getDeviceTokens(userId);
+
+      expect(deviceTokenModel.find).toHaveBeenCalledWith({
+        userId: new Types.ObjectId(userId),
+      });
     });
   });
 });

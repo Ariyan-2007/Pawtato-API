@@ -79,6 +79,25 @@ export class Pet {
   @Prop()
   lastSeenLocation?: string;
 
+  // Structured counterpart to lastSeenLocation (which stays free text for
+  // display) — only set when the owner supplies coordinates on report-lost,
+  // powers GET /public/lost-pets/nearby's geospatial search. GeoJSON Point,
+  // [lng, lat] per the spec's coordinate order (see the 2dsphere index
+  // below).
+  @Prop({
+    type: {
+      type: String,
+      enum: ['Point'],
+    },
+    coordinates: {
+      type: [Number],
+    },
+  })
+  lastSeenGeo?: {
+    type: 'Point';
+    coordinates: [number, number];
+  };
+
   @Prop()
   lostDescription?: string;
 
@@ -102,3 +121,9 @@ export const PetSchema = SchemaFactory.createForClass(Pet);
 // Backs PublicService.getLostPets() (`{ isLost: true }` sorted by `lostDate` desc)
 // and the admin/statistics lost/recovered counters.
 PetSchema.index({ isLost: 1, lostDate: -1 });
+
+// Backs PublicService.getNearbyLostPets()'s $geoNear aggregation. A pet
+// without lastSeenGeo is simply absent from a 2dsphere index (not indexed
+// as "nowhere"), so this never affects pets reported lost with only a text
+// location.
+PetSchema.index({ lastSeenGeo: '2dsphere' });

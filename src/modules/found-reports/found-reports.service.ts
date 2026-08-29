@@ -108,6 +108,7 @@ export class FoundReportsService {
       this.eventEmitter.emit(DOMAIN_EVENTS.FOUND_REPORT_CREATED, {
         ownerId: String(ownerId),
         ownerEmail,
+        ownerPhone: pet.owner.phone || undefined,
         petId,
         petName: pet.name,
         foundReportId: String(report._id),
@@ -213,10 +214,19 @@ export class FoundReportsService {
     return report;
   }
 
+  // `ownerId` here is really "the acting user" — the owner or, since Phase
+  // 15, an authorized caretaker. See PetsService.findAccessiblePet().
+  //
+  // Explicit ObjectId cast — found during Phase 16's audit for the same bug
+  // class fixed in MedicalService/VaccinationsService: create() above
+  // always stores `pet` as a real ObjectId (`tag.assignedPetId`, already
+  // typed), so a raw-string filter here silently matched nothing.
   async findForOwnedPet(ownerId: string, petId: string) {
-    await this.petsService.findOwnedPet(ownerId, petId);
+    await this.petsService.findAccessiblePet(ownerId, petId);
 
-    return this.foundReportModel.find({ pet: petId }).sort({ createdAt: -1 });
+    return this.foundReportModel
+      .find({ pet: new Types.ObjectId(petId) })
+      .sort({ createdAt: -1 });
   }
 
   // Scoped to the tag itself (not whichever pet currently owns it) — a

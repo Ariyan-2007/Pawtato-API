@@ -138,6 +138,32 @@ export class DatingController {
     return this.datingService.sendMessage(user.sub, matchId, dto);
   }
 
+  @ApiOperation({
+    summary: 'Mark a conversation as read',
+    description:
+      'Deletes every unread DatingChatNotification the caller has for this match — this is a ' +
+      'dedicated system, entirely separate from the general Notifications API, that only tracks ' +
+      'unread dating-chat messages. "Read" means the notification row no longer exists, not a ' +
+      'flag flip.',
+  })
+  @ApiParam({ name: 'matchId', description: 'Match ID' })
+  @ApiResponse({
+    status: 201,
+    description:
+      'Number of unread notifications deleted for this conversation.',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Match not found, or the caller owns neither side.',
+  })
+  @Post('matches/:matchId/read')
+  markChatRead(
+    @CurrentUser() user: JwtPayload,
+    @Param('matchId', ParseMongoIdPipe) matchId: string,
+  ) {
+    return this.datingService.markChatRead(user.sub, matchId);
+  }
+
   @ApiOperation({ summary: 'Unmatch — either side can end it' })
   @ApiParam({ name: 'matchId', description: 'Match ID' })
   @ApiResponse({ status: 201, description: 'Unmatched successfully.' })

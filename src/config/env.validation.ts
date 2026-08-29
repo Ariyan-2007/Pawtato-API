@@ -49,4 +49,13 @@ export const envValidationSchema = Joi.object({
   S3_FORCE_PATH_STYLE: Joi.string().valid('true', 'false').optional(),
 
   DATING_POOL_RESET_DAYS: Joi.number().integer().min(1).default(3),
+
+  // Optional — the QR tag ordering/commerce endpoints (Phase 19) throw a
+  // clear 503 at request time if these are unset rather than failing boot,
+  // since this feature is additive and shouldn't block the rest of the API
+  // from starting in an environment that hasn't set up Stripe yet.
+  STRIPE_SECRET_KEY: Joi.string().optional(),
+  STRIPE_WEBHOOK_SECRET: Joi.string().optional(),
+  TAG_UNIT_PRICE_CENTS: Joi.number().integer().min(1).default(999),
+  STRIPE_CURRENCY: Joi.string().lowercase().default('usd'),
 });

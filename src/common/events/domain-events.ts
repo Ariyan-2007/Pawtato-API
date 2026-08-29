@@ -36,6 +36,9 @@ export type DomainEventName =
 export interface PetMarkedLostEvent {
   ownerId: string;
   ownerEmail: string;
+  // Optional — the owner may not have a phone on file. Only SmsChannel reads
+  // this (Phase 17); every other consumer is unaffected by its absence.
+  ownerPhone?: string;
   petId: string;
   petName: string;
 }
@@ -43,6 +46,7 @@ export interface PetMarkedLostEvent {
 export interface PetMarkedFoundEvent {
   ownerId: string;
   ownerEmail: string;
+  ownerPhone?: string;
   petId: string;
   petName: string;
 }
@@ -77,6 +81,7 @@ export interface QrTagScannedEvent {
 export interface FoundReportCreatedEvent {
   ownerId: string;
   ownerEmail: string;
+  ownerPhone?: string;
   petId: string;
   petName: string;
   foundReportId: string;
@@ -125,6 +130,13 @@ export interface DatingMessageSentEvent {
   createdAt: Date;
   ownerAId: string;
   ownerBId: string;
+  // The Match's two participating pets, straight from the Match document —
+  // lets a listener (e.g. DatingChatNotificationListener) resolve exactly
+  // which pet sent/received this message without a second DB round-trip,
+  // even though a single owner may have several pets across several
+  // matches. See DatingService.sendMessage().
+  petAId: string;
+  petBId: string;
 }
 
 export interface DatingMatchUnmatchedEvent {

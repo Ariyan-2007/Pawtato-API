@@ -13,7 +13,10 @@ import {
   Notification,
   NotificationSchema,
 } from './schemas/notification.schema';
+import { DeviceToken, DeviceTokenSchema } from './schemas/device-token.schema';
 import { EmailChannel } from './channels/email.channel';
+import { SmsChannel } from './channels/sms.channel';
+import { PushChannel } from './channels/push.channel';
 import { DomainEventsListener } from './listeners/domain-events.listener';
 import { NOTIFICATION_CHANNELS } from './notifications.constants';
 import { NotificationChannel } from './interfaces/notification-channel.interface';
@@ -26,6 +29,7 @@ import { VaccinationsModule } from '../vaccinations/vaccinations.module';
 
     MongooseModule.forFeature([
       { name: Notification.name, schema: NotificationSchema },
+      { name: DeviceToken.name, schema: DeviceTokenSchema },
     ]),
 
     MailerModule.forRootAsync({
@@ -65,11 +69,17 @@ import { VaccinationsModule } from '../vaccinations/vaccinations.module';
     VaccinationReminderJob,
     NotificationCleanupJob,
     EmailChannel,
+    SmsChannel,
+    PushChannel,
     DomainEventsListener,
     {
       provide: NOTIFICATION_CHANNELS,
-      useFactory: (email: EmailChannel): NotificationChannel[] => [email],
-      inject: [EmailChannel],
+      useFactory: (
+        email: EmailChannel,
+        sms: SmsChannel,
+        push: PushChannel,
+      ): NotificationChannel[] => [email, sms, push],
+      inject: [EmailChannel, SmsChannel, PushChannel],
     },
   ],
 

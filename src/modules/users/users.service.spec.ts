@@ -108,6 +108,29 @@ describe('UsersService', () => {
     });
   });
 
+  describe('findByEmailForLookup', () => {
+    it('selects only the safe-to-return display fields, never password/OTP', async () => {
+      const select = jest.fn().mockResolvedValue({
+        _id: 'user-2',
+        fullName: 'Dr. Vet',
+        email: 'vet@example.com',
+      });
+      userModel.findOne.mockReturnValue({ select });
+
+      const result = await service.findByEmailForLookup('vet@example.com');
+
+      expect(userModel.findOne).toHaveBeenCalledWith({
+        email: 'vet@example.com',
+      });
+      expect(select).toHaveBeenCalledWith('_id fullName email');
+      expect(result).toEqual({
+        _id: 'user-2',
+        fullName: 'Dr. Vet',
+        email: 'vet@example.com',
+      });
+    });
+  });
+
   describe('setOtp', () => {
     it('overwrites the OTP fields and resets the attempt counter', async () => {
       userModel.findByIdAndUpdate.mockResolvedValue({});

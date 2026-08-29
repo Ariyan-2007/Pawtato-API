@@ -26,6 +26,8 @@ import { AdminModule } from './modules/admin/admin.module';
 import { ActivityModule } from './modules/activity/activity.module';
 import { StorageModule } from './modules/storage/storage.module';
 import { DatingModule } from './modules/dating/dating.module';
+import { CaretakersModule } from './modules/caretakers/caretakers.module';
+import { TagOrdersModule } from './modules/tag-orders/tag-orders.module';
 
 @Module({
   imports: [
@@ -126,6 +128,10 @@ import { DatingModule } from './modules/dating/dating.module';
     ActivityModule,
 
     DatingModule,
+
+    CaretakersModule,
+
+    TagOrdersModule,
   ],
   providers: [
     {

@@ -6,6 +6,7 @@ import {
   Inject,
   Param,
   Post,
+  Query,
   UploadedFile,
   UseInterceptors,
 } from '@nestjs/common';
@@ -22,6 +23,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 
 import { PublicService } from './public.service';
 import { CreateFoundReportDto } from '../found-reports/dto/create-found-report.dto';
+import { NearbyLostPetsQueryDto } from './dto/nearby-lost-pets-query.dto';
 import {
   imageFileFilter,
   MAX_IMAGE_SIZE_BYTES,
@@ -81,6 +83,27 @@ export class PublicController {
   @Get('lost-pets')
   getLostPets() {
     return this.publicService.getLostPets();
+  }
+
+  @ApiOperation({
+    summary: 'List pets reported lost near a given point',
+    description:
+      'No authentication required. Only pets whose owner supplied coordinates on report-lost ' +
+      '(the `lat`/`lng` fields are optional) are searchable this way — a pet reported lost with ' +
+      'only a text location will still appear in GET /public/lost-pets but not here.',
+  })
+  @ApiResponse({
+    status: 200,
+    description:
+      'List of lost pets within the given radius, nearest first, with public-safe fields only.',
+  })
+  @Throttle({ public: { limit: 20, ttl: 60_000 } })
+  @Get('lost-pets/nearby')
+  getNearbyLostPets(
+    @Query()
+    query: NearbyLostPetsQueryDto,
+  ) {
+    return this.publicService.getNearbyLostPets(query);
   }
 
   @ApiOperation({

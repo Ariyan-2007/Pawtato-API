@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 
 import { Activity, ActivityDocument } from './schemas/activity.schema';
 import { ActivityQueryDto } from './dto/activity-query.dto';
@@ -13,6 +13,14 @@ export class ActivityService {
     private readonly activityModel: Model<ActivityDocument>,
   ) {}
 
+  // `actor` is explicitly cast to ObjectId — found while auditing the same
+  // bug class Phase 16 fixed in MedicalService/VaccinationsService: storing
+  // it as a raw string (the pre-existing behavior) left `findAll()`'s
+  // `.populate('actor', 'fullName email')` unable to resolve the actor's
+  // info against the User collection, since populate matches on real
+  // ObjectId equality. `target` is deliberately left as a plain string —
+  // it's a generic label (petId/tagId/reportId/...), not a single-collection
+  // ref, so there's no populate/cast concern for it.
   async log(
     actor: string,
     action: string,
@@ -20,7 +28,7 @@ export class ActivityService {
     metadata: Record<string, any> = {},
   ) {
     return this.activityModel.create({
-      actor,
+      actor: new Types.ObjectId(actor),
       action,
       target,
       metadata,
@@ -33,7 +41,7 @@ export class ActivityService {
     const filter: Record<string, unknown> = {};
 
     if (actor) {
-      filter.actor = actor;
+      filter.actor = new Types.ObjectId(actor);
     }
 
     if (action) {

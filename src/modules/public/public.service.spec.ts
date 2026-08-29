@@ -11,7 +11,11 @@ import { TagStatus } from '../../common/enums/tag-status.enum';
 
 describe('PublicService', () => {
   let service: PublicService;
-  let petModel: { findByIdAndUpdate: jest.Mock; find: jest.Mock };
+  let petModel: {
+    findByIdAndUpdate: jest.Mock;
+    find: jest.Mock;
+    aggregate: jest.Mock;
+  };
   let tagModel: { findOne: jest.Mock; find: jest.Mock };
   let scansService: { record: jest.Mock };
   let foundReportsService: { create: jest.Mock };
@@ -19,7 +23,11 @@ describe('PublicService', () => {
   const petId = new Types.ObjectId();
 
   beforeEach(async () => {
-    petModel = { findByIdAndUpdate: jest.fn(), find: jest.fn() };
+    petModel = {
+      findByIdAndUpdate: jest.fn(),
+      find: jest.fn(),
+      aggregate: jest.fn(),
+    };
     tagModel = { findOne: jest.fn(), find: jest.fn() };
     scansService = { record: jest.fn().mockResolvedValue(undefined) };
     foundReportsService = {
@@ -230,6 +238,53 @@ describe('PublicService', () => {
       result.forEach((pet) => {
         expect(pet).not.toHaveProperty('_id');
       });
+    });
+  });
+
+  describe('getNearbyLostPets', () => {
+    it('runs a $geoNear aggregation scoped to isLost pets within the radius and rounds distance', async () => {
+      petModel.aggregate.mockResolvedValue([
+        {
+          _id: petId,
+          name: 'Milo',
+          species: 'Cat',
+          breed: 'Persian',
+          distanceKm: 3.14159,
+        },
+      ]);
+      tagModel.find.mockReturnValue({
+        select: jest.fn().mockReturnValue({
+          lean: jest
+            .fn()
+            .mockResolvedValue([{ assignedPetId: petId, publicCode: 'CODE1' }]),
+        }),
+      });
+
+      const result = await service.getNearbyLostPets({
+        lat: 23.7,
+        lng: 90.4,
+        radiusKm: 5,
+      });
+
+      expect(petModel.aggregate).toHaveBeenCalledWith([
+        expect.objectContaining({
+          $geoNear: expect.objectContaining({
+            near: { type: 'Point', coordinates: [90.4, 23.7] },
+            maxDistance: 5000,
+            query: { isLost: true },
+            spherical: true,
+          }) as object,
+        }),
+        expect.anything(),
+      ]);
+      expect(result).toEqual([
+        expect.objectContaining({
+          name: 'Milo',
+          publicCode: 'CODE1',
+          distanceKm: 3.1,
+        }),
+      ]);
+      expect(result[0]).not.toHaveProperty('_id');
     });
   });
 

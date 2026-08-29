@@ -1,6 +1,11 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Types } from 'mongoose';
 
+import {
+  AttachedDocument,
+  AttachedDocumentSchema,
+} from '../../../common/schemas/attached-document.schema';
+
 export type MedicalRecordDocument = HydratedDocument<MedicalRecord>;
 
 @Schema({
@@ -37,6 +42,13 @@ export class MedicalRecord {
 
   @Prop()
   notes?: string;
+
+  // Phase 16 — attached certificates/lab results/vet letters. Managed only
+  // through MedicalService.addDocument()/removeDocument(), never directly
+  // via create()/update — mirrors this codebase's established pattern of
+  // never letting arbitrary client input construct a stored-file reference.
+  @Prop({ type: [AttachedDocumentSchema], default: [] })
+  documents!: AttachedDocument[];
 }
 
 export const MedicalRecordSchema = SchemaFactory.createForClass(MedicalRecord);

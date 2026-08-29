@@ -71,10 +71,19 @@ export class ScansService {
     }
   }
 
+  // `ownerId` here is really "the acting user" — the owner or, since Phase
+  // 15, an authorized caretaker. See PetsService.findAccessiblePet().
+  //
+  // Explicit ObjectId cast — found during Phase 16's audit for the same bug
+  // class fixed in MedicalService/VaccinationsService: record() above always
+  // stores `pet` as a real ObjectId (it receives one, typed, from the
+  // caller), so a raw-string filter here silently matched nothing.
   async findForOwnedPet(ownerId: string, petId: string) {
-    await this.petsService.findOwnedPet(ownerId, petId);
+    await this.petsService.findAccessiblePet(ownerId, petId);
 
-    return this.scanEventModel.find({ pet: petId }).sort({ createdAt: -1 });
+    return this.scanEventModel
+      .find({ pet: new Types.ObjectId(petId) })
+      .sort({ createdAt: -1 });
   }
 
   // Cascade delete — every scan event tied to any of these pets or tags.

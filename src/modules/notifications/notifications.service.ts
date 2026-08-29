@@ -7,7 +7,12 @@ import {
   Notification,
   NotificationDocument,
 } from './schemas/notification.schema';
+import {
+  DeviceToken,
+  DeviceTokenDocument,
+} from './schemas/device-token.schema';
 import { NotificationQueryDto } from './dto/notification-query.dto';
+import { RegisterDeviceTokenDto } from './dto/register-device-token.dto';
 import { renderPlainTextTemplate } from '../../mail/mail-template.util';
 import { NotificationPriority } from './enums/notification-priority.enum';
 import {
@@ -22,6 +27,9 @@ export class NotificationsService {
 
     @InjectModel(Notification.name)
     private readonly notificationModel: Model<NotificationDocument>,
+
+    @InjectModel(DeviceToken.name)
+    private readonly deviceTokenModel: Model<DeviceTokenDocument>,
   ) {}
 
   async sendEmail(to: string, subject: string, message: string) {
@@ -198,5 +206,35 @@ export class NotificationsService {
       },
       { priority: NotificationPriority.STALE_MISSING, expiresAt },
     );
+  }
+
+  // Upserts on `token` alone (not `{ userId, token }`) — a token belongs to
+  // exactly one device, and if that device is now logged in as a different
+  // user (or the same user re-registers after a fresh install), the token
+  // should move to point at the current owner rather than create a stale
+  // duplicate row for the old one.
+  async registerDeviceToken(userId: string, dto: RegisterDeviceTokenDto) {
+    return this.deviceTokenModel.findOneAndUpdate(
+      { token: dto.token },
+      { userId: new Types.ObjectId(userId), platform: dto.platform },
+      { upsert: true, new: true },
+    );
+  }
+
+  async unregisterDeviceToken(userId: string, token: string) {
+    const result = await this.deviceTokenModel.findOneAndDelete({
+      token,
+      userId: new Types.ObjectId(userId),
+    });
+
+    if (!result) {
+      throw new NotFoundException('Device token not found');
+    }
+
+    return { message: 'Device token removed' };
+  }
+
+  async getDeviceTokens(userId: string) {
+    return this.deviceTokenModel.find({ userId: new Types.ObjectId(userId) });
   }
 }

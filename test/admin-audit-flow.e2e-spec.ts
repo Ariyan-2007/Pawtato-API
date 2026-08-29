@@ -43,6 +43,7 @@ describe('Admin, audit & abuse handling (e2e)', () => {
   const ownerEmail = `admin-audit-owner-${runId}@example.com`;
 
   let adminAccessToken: string;
+  let adminUserId: string;
   let ownerAccessToken: string;
   let ownerUserId: string;
   let petId: string;
@@ -90,6 +91,7 @@ describe('Admin, audit & abuse handling (e2e)', () => {
 
   it('promotes a freshly-registered account to ADMIN and re-logs-in for a token carrying that role', async () => {
     const { user } = await registerAndVerify('Ops Admin', adminEmail);
+    adminUserId = user.id;
 
     await userModel.findByIdAndUpdate(user.id, { role: UserRole.ADMIN });
 
@@ -265,5 +267,53 @@ describe('Admin, audit & abuse handling (e2e)', () => {
         'admin.user.blocked',
       ]),
     );
+  });
+
+  // Regression coverage for a real bug found while building Phase 16: the
+  // audit log's `actor` field was stored as a raw string, not an ObjectId,
+  // which silently broke both `.populate('actor', 'fullName email')` (the
+  // actor's name/email never resolved) and the `?actor=` query filter — no
+  // prior e2e spec asserted on either.
+  it("each entry's actor is populated with fullName/email, not just a raw id", async () => {
+    // Scoped to this test's own admin via ?actor= — an unscoped query would
+    // also pick up activity entries from other e2e spec files sharing this
+    // same throwaway MongoDB instance, some of which (by design — see
+    // admin-user-deletion-cascade.e2e-spec.ts) legitimately reference a
+    // since-deleted user and populate to null. That's correct behavior for
+    // those entries, not something this test should be asserting against.
+    const res = await request(app.getHttpServer())
+      .get('/api/activity')
+      .set('Authorization', `Bearer ${adminAccessToken}`)
+      .query({ limit: 50, actor: adminUserId })
+      .expect(200);
+
+    const page = data<{
+      activities: Array<{ actor: { fullName: string; email: string } }>;
+    }>(res);
+
+    expect(page.activities.length).toBeGreaterThan(0);
+    for (const entry of page.activities) {
+      expect(entry.actor).toEqual(
+        expect.objectContaining({
+          fullName: expect.any(String) as string,
+          email: expect.any(String) as string,
+        }),
+      );
+    }
+  });
+
+  it("filtering by ?actor= returns only that admin's own actions", async () => {
+    const res = await request(app.getHttpServer())
+      .get('/api/activity')
+      .set('Authorization', `Bearer ${adminAccessToken}`)
+      .query({ limit: 50, actor: adminUserId })
+      .expect(200);
+
+    const page = data<{ activities: Array<{ action: string }> }>(res);
+
+    expect(page.activities.length).toBeGreaterThan(0);
+    expect(
+      page.activities.some((entry) => entry.action === 'admin.user.blocked'),
+    ).toBe(true);
   });
 });

@@ -15,7 +15,7 @@ describe('ScansService', () => {
     find: jest.Mock;
     deleteMany: jest.Mock;
   };
-  let petsService: { findOwnedPet: jest.Mock; findWithOwner: jest.Mock };
+  let petsService: { findAccessiblePet: jest.Mock; findWithOwner: jest.Mock };
   let eventEmitter: { emit: jest.Mock };
 
   const tagId = new Types.ObjectId();
@@ -27,7 +27,7 @@ describe('ScansService', () => {
       find: jest.fn(),
       deleteMany: jest.fn().mockResolvedValue({ deletedCount: 0 }),
     };
-    petsService = { findOwnedPet: jest.fn(), findWithOwner: jest.fn() };
+    petsService = { findAccessiblePet: jest.fn(), findWithOwner: jest.fn() };
     eventEmitter = { emit: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -103,13 +103,18 @@ describe('ScansService', () => {
 
       await service.findForOwnedPet(ownerId, petIdStr);
 
-      expect(petsService.findOwnedPet).toHaveBeenCalledWith(ownerId, petIdStr);
-      expect(scanEventModel.find).toHaveBeenCalledWith({ pet: petIdStr });
+      expect(petsService.findAccessiblePet).toHaveBeenCalledWith(
+        ownerId,
+        petIdStr,
+      );
+      expect(scanEventModel.find).toHaveBeenCalledWith({
+        pet: new Types.ObjectId(petIdStr),
+      });
     });
 
     it('propagates the NotFoundException when the caller does not own the pet', async () => {
       const notOwned = new Error('Pet not found');
-      petsService.findOwnedPet.mockRejectedValue(notOwned);
+      petsService.findAccessiblePet.mockRejectedValue(notOwned);
 
       await expect(
         service.findForOwnedPet('someone-else', petId.toString()),

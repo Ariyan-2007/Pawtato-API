@@ -16,6 +16,7 @@ import { MedicalService } from '../medical/medical.service';
 import { VaccinationsService } from '../vaccinations/vaccinations.service';
 import { ActivityService } from '../activity/activity.service';
 import { IdentityVerificationService } from './identity-verification.service';
+import { DatingChatNotificationService } from './dating-chat-notification.service';
 import { DatingMode } from '../../common/enums/dating-mode.enum';
 import { SwipeAction } from '../../common/enums/swipe-action.enum';
 import { MatchStatus } from '../../common/enums/match-status.enum';
@@ -75,6 +76,12 @@ describe('DatingService', () => {
     isApproved: jest.Mock;
     getApprovedUserIds: jest.Mock;
     getSignedNidUrls: jest.Mock;
+  };
+  let datingChatNotificationService: {
+    createForMessage: jest.Mock;
+    markConversationRead: jest.Mock;
+    deleteAllForPets: jest.Mock;
+    deleteAllForMatches: jest.Mock;
   };
   let eventEmitter: { emit: jest.Mock };
   let configService: { get: jest.Mock };
@@ -155,6 +162,12 @@ describe('DatingService', () => {
         .fn()
         .mockResolvedValue({ frontUrl: 'front-url', backUrl: 'back-url' }),
     };
+    datingChatNotificationService = {
+      createForMessage: jest.fn().mockResolvedValue(undefined),
+      markConversationRead: jest.fn().mockResolvedValue({ deletedCount: 0 }),
+      deleteAllForPets: jest.fn().mockResolvedValue({ deletedCount: 0 }),
+      deleteAllForMatches: jest.fn().mockResolvedValue({ deletedCount: 0 }),
+    };
     eventEmitter = { emit: jest.fn() };
     configService = { get: jest.fn().mockReturnValue(3) };
 
@@ -179,6 +192,10 @@ describe('DatingService', () => {
         {
           provide: IdentityVerificationService,
           useValue: identityVerificationService,
+        },
+        {
+          provide: DatingChatNotificationService,
+          useValue: datingChatNotificationService,
         },
         { provide: EventEmitter2, useValue: eventEmitter },
         { provide: ConfigService, useValue: configService },
@@ -1074,6 +1091,54 @@ describe('DatingService', () => {
       expect(messageModel.create).toHaveBeenCalledWith(
         expect.objectContaining({ matchId, content: 'hi' }),
       );
+      // The emitted event carries both participating pets straight from the
+      // Match document — DatingChatNotificationListener relies on this to
+      // resolve sender/recipient pet without a second DB round-trip.
+      expect(eventEmitter.emit).toHaveBeenCalledWith(
+        'dating.message-sent',
+        expect.objectContaining({
+          petAId: petId.toString(),
+          petBId: otherPetId.toString(),
+        }),
+      );
+    });
+
+    it('markChatRead delegates the delete to DatingChatNotificationService once ownership is verified', async () => {
+      matchModel.findById.mockResolvedValue(makeMatch());
+      petsService.findByIdAdmin
+        .mockResolvedValueOnce(makePet({ _id: petId, owner: ownerId }))
+        .mockResolvedValueOnce(
+          makePet({ _id: otherPetId, owner: otherOwnerId }),
+        );
+      datingChatNotificationService.markConversationRead.mockResolvedValue({
+        deletedCount: 3,
+      });
+
+      const result = await service.markChatRead(ownerId, matchId);
+
+      expect(
+        datingChatNotificationService.markConversationRead,
+      ).toHaveBeenCalledWith(ownerId, matchId);
+      expect(result).toEqual({
+        message: 'Conversation marked as read',
+        deletedCount: 3,
+      });
+    });
+
+    it('markChatRead throws NotFoundException when the caller owns neither side (IDOR-safe)', async () => {
+      matchModel.findById.mockResolvedValue(makeMatch());
+      petsService.findByIdAdmin
+        .mockResolvedValueOnce(makePet({ _id: petId, owner: otherOwnerId }))
+        .mockResolvedValueOnce(
+          makePet({ _id: otherPetId, owner: 'someone-else' }),
+        );
+
+      await expect(service.markChatRead(ownerId, matchId)).rejects.toThrow(
+        NotFoundException,
+      );
+      expect(
+        datingChatNotificationService.markConversationRead,
+      ).not.toHaveBeenCalled();
     });
 
     it('unmatch flips status to UNMATCHED', async () => {
@@ -1465,6 +1530,12 @@ describe('DatingService', () => {
       expect(swipeModel.deleteMany).toHaveBeenCalled();
       expect(datingReportModel.deleteMany).toHaveBeenCalled();
       expect(profileModel.deleteMany).toHaveBeenCalled();
+      expect(
+        datingChatNotificationService.deleteAllForMatches,
+      ).toHaveBeenCalledWith([matchDoc._id]);
+      expect(
+        datingChatNotificationService.deleteAllForPets,
+      ).toHaveBeenCalledWith([petId.toString()]);
       expect(result).toEqual({ deletedCount: 1 });
     });
 

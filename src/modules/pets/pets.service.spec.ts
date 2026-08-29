@@ -5,6 +5,7 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Types } from 'mongoose';
 import { PetsService } from './pets.service';
 import { Pet } from './schemas/pet.schema';
+import { PetCaretaker } from '../caretakers/schemas/pet-caretaker.schema';
 import { DOMAIN_EVENTS } from '../../common/events/domain-events';
 import { STORAGE_PROVIDER } from '../storage/storage.constants';
 import { ActivityService } from '../activity/activity.service';
@@ -14,6 +15,8 @@ describe('PetsService', () => {
   let petModel: {
     findOneAndUpdate: jest.Mock;
     findOne: jest.Mock;
+    findById: jest.Mock;
+    findByIdAndUpdate: jest.Mock;
     findOneAndDelete: jest.Mock;
     findByIdAndDelete: jest.Mock;
     find: jest.Mock;
@@ -21,6 +24,7 @@ describe('PetsService', () => {
     distinct: jest.Mock;
     deleteMany: jest.Mock;
   };
+  let caretakerModel: { exists: jest.Mock };
   let storageProvider: { deleteByUrl: jest.Mock };
   let eventEmitter: { emit: jest.Mock };
   let activityService: { log: jest.Mock };
@@ -33,6 +37,8 @@ describe('PetsService', () => {
     petModel = {
       findOneAndUpdate: jest.fn(),
       findOne: jest.fn(),
+      findById: jest.fn(),
+      findByIdAndUpdate: jest.fn(),
       findOneAndDelete: jest.fn(),
       findByIdAndDelete: jest.fn(),
       find: jest.fn(),
@@ -40,6 +46,7 @@ describe('PetsService', () => {
       distinct: jest.fn(),
       deleteMany: jest.fn().mockResolvedValue({ deletedCount: 0 }),
     };
+    caretakerModel = { exists: jest.fn().mockResolvedValue(null) };
     storageProvider = {
       deleteByUrl: jest.fn().mockResolvedValue(undefined),
     };
@@ -50,6 +57,10 @@ describe('PetsService', () => {
       providers: [
         PetsService,
         { provide: getModelToken(Pet.name), useValue: petModel },
+        {
+          provide: getModelToken(PetCaretaker.name),
+          useValue: caretakerModel,
+        },
         { provide: EventEmitter2, useValue: eventEmitter },
         { provide: ActivityService, useValue: activityService },
         { provide: STORAGE_PROVIDER, useValue: storageProvider },
@@ -63,23 +74,13 @@ describe('PetsService', () => {
     expect(service).toBeDefined();
   });
 
-  // Ownership enforcement: every one of these methods scopes the query to
+  // Ownership enforcement: `update`/`remove` scope the query to
   // `{ _id: petId, owner: ownerId }` — a caller supplying another user's
   // petId must get the exact same "not found" as a nonexistent id, never a
-  // 403 that would confirm the id belongs to someone else.
+  // 403 that would confirm the id belongs to someone else. `findOne`/
+  // `reportLost`/`reportFound` are exercised separately below, since Phase
+  // 15 changed their authorization to findAccessiblePet (owner OR caretaker).
   describe('ownership enforcement', () => {
-    it('findOne throws NotFoundException for a pet owned by someone else', async () => {
-      petModel.findOne.mockResolvedValue(null);
-
-      await expect(service.findOne(otherOwnerId, petId)).rejects.toThrow(
-        NotFoundException,
-      );
-      expect(petModel.findOne).toHaveBeenCalledWith({
-        _id: petId,
-        owner: new Types.ObjectId(otherOwnerId),
-      });
-    });
-
     it('findOwnedPet throws NotFoundException for a pet owned by someone else', async () => {
       petModel.findOne.mockResolvedValue(null);
 
@@ -109,24 +110,6 @@ describe('PetsService', () => {
       );
     });
 
-    it('reportLost throws NotFoundException for a pet owned by someone else', async () => {
-      petModel.findOneAndUpdate.mockResolvedValue(null);
-
-      await expect(service.reportLost(otherOwnerId, petId, {})).rejects.toThrow(
-        NotFoundException,
-      );
-      expect(eventEmitter.emit).not.toHaveBeenCalled();
-    });
-
-    it('reportFound throws NotFoundException for a pet owned by someone else', async () => {
-      petModel.findOneAndUpdate.mockResolvedValue(null);
-
-      await expect(service.reportFound(otherOwnerId, petId)).rejects.toThrow(
-        NotFoundException,
-      );
-      expect(eventEmitter.emit).not.toHaveBeenCalled();
-    });
-
     it('findAll only ever queries pets scoped to the caller', async () => {
       const sort = jest.fn().mockResolvedValue([]);
       petModel.find = jest.fn().mockReturnValue({ sort });
@@ -146,20 +129,21 @@ describe('PetsService', () => {
         name: 'Milo',
         isLost: false,
         populate: jest.fn().mockResolvedValue(undefined),
-        owner: { email: 'owner@example.com' },
+        owner: new Types.ObjectId(ownerId),
         ...overrides,
       };
     }
 
     it('reportLost sets isLost=true, stamps lostDate, and emits pet.marked-lost', async () => {
       const pet = makePetDoc();
-      petModel.findOneAndUpdate.mockResolvedValue(pet);
+      petModel.findById.mockResolvedValue(pet);
+      petModel.findByIdAndUpdate.mockResolvedValue(pet);
 
       const dto = { lastSeenLocation: 'Dhanmondi', lostDescription: 'Ran off' };
       await service.reportLost(ownerId, petId, dto);
 
-      expect(petModel.findOneAndUpdate).toHaveBeenCalledWith(
-        { _id: petId, owner: new Types.ObjectId(ownerId) },
+      expect(petModel.findByIdAndUpdate).toHaveBeenCalledWith(
+        petId,
         expect.objectContaining({
           ...dto,
           isLost: true,
@@ -181,16 +165,18 @@ describe('PetsService', () => {
 
     it('reportFound clears every lost-specific field and emits pet.marked-found', async () => {
       const pet = makePetDoc({ isLost: false });
-      petModel.findOneAndUpdate.mockResolvedValue(pet);
+      petModel.findById.mockResolvedValue(pet);
+      petModel.findByIdAndUpdate.mockResolvedValue(pet);
 
       await service.reportFound(ownerId, petId);
 
-      expect(petModel.findOneAndUpdate).toHaveBeenCalledWith(
-        { _id: petId, owner: new Types.ObjectId(ownerId) },
+      expect(petModel.findByIdAndUpdate).toHaveBeenCalledWith(
+        petId,
         {
           isLost: false,
           lostDate: undefined,
           lastSeenLocation: undefined,
+          lastSeenGeo: undefined,
           lostDescription: undefined,
           reward: undefined,
         },
@@ -212,11 +198,118 @@ describe('PetsService', () => {
       const pet = makePetDoc({
         populate: jest.fn().mockRejectedValue(new Error('populate failed')),
       });
-      petModel.findOneAndUpdate.mockResolvedValue(pet);
+      petModel.findById.mockResolvedValue(pet);
+      petModel.findByIdAndUpdate.mockResolvedValue(pet);
 
       await expect(service.reportLost(ownerId, petId, {})).resolves.toBe(pet);
       expect(eventEmitter.emit).not.toHaveBeenCalled();
       expect(activityService.log).toHaveBeenCalled();
+    });
+
+    it('reportLost throws NotFoundException when the caller has no access to the pet', async () => {
+      petModel.findById.mockResolvedValue(null);
+
+      await expect(service.reportLost(otherOwnerId, petId, {})).rejects.toThrow(
+        NotFoundException,
+      );
+      expect(petModel.findByIdAndUpdate).not.toHaveBeenCalled();
+      expect(eventEmitter.emit).not.toHaveBeenCalled();
+    });
+
+    it('reportFound throws NotFoundException when the caller has no access to the pet', async () => {
+      petModel.findById.mockResolvedValue(null);
+
+      await expect(service.reportFound(otherOwnerId, petId)).rejects.toThrow(
+        NotFoundException,
+      );
+      expect(petModel.findByIdAndUpdate).not.toHaveBeenCalled();
+      expect(eventEmitter.emit).not.toHaveBeenCalled();
+    });
+
+    it('a caretaker (not the owner) can report the pet lost, and the notification still goes to the real owner', async () => {
+      const pet = makePetDoc();
+      petModel.findById.mockResolvedValue(pet);
+      petModel.findByIdAndUpdate.mockResolvedValue(pet);
+      caretakerModel.exists.mockResolvedValue({ _id: new Types.ObjectId() });
+
+      const caretakerId = new Types.ObjectId().toString();
+      await service.reportLost(caretakerId, petId, {});
+
+      expect(caretakerModel.exists).toHaveBeenCalledWith({
+        petId: pet._id,
+        userId: new Types.ObjectId(caretakerId),
+      });
+      // The owner-facing notification still names the real owner...
+      expect(eventEmitter.emit).toHaveBeenCalledWith(
+        DOMAIN_EVENTS.PET_MARKED_LOST,
+        expect.objectContaining({ ownerId, petId }),
+      );
+      // ...but the audit-log entry records who actually performed it.
+      expect(activityService.log).toHaveBeenCalledWith(
+        caretakerId,
+        DOMAIN_EVENTS.PET_MARKED_LOST,
+        petId,
+        { petName: 'Milo' },
+      );
+    });
+  });
+
+  // Phase 15 — shared pet access. findAccessiblePet() is the single
+  // authorization checkpoint findOne/reportLost/reportFound and every
+  // caretaking-relevant action in other modules (medical, vaccinations,
+  // scans, found-reports) now go through.
+  describe('findAccessiblePet (Phase 15 — shared pet access)', () => {
+    it('throws NotFoundException for a pet that does not exist', async () => {
+      petModel.findById.mockResolvedValue(null);
+
+      await expect(service.findAccessiblePet(ownerId, petId)).rejects.toThrow(
+        NotFoundException,
+      );
+      expect(caretakerModel.exists).not.toHaveBeenCalled();
+    });
+
+    it('returns the pet for its owner without ever querying caretakers', async () => {
+      const pet = { _id: petId, owner: new Types.ObjectId(ownerId) };
+      petModel.findById.mockResolvedValue(pet);
+
+      const result = await service.findAccessiblePet(ownerId, petId);
+
+      expect(result).toBe(pet);
+      expect(caretakerModel.exists).not.toHaveBeenCalled();
+    });
+
+    it('returns the pet for an active caretaker who is not the owner', async () => {
+      const pet = { _id: petId, owner: new Types.ObjectId(otherOwnerId) };
+      petModel.findById.mockResolvedValue(pet);
+      caretakerModel.exists.mockResolvedValue({ _id: new Types.ObjectId() });
+
+      const result = await service.findAccessiblePet(ownerId, petId);
+
+      expect(result).toBe(pet);
+      expect(caretakerModel.exists).toHaveBeenCalledWith({
+        petId: pet._id,
+        userId: new Types.ObjectId(ownerId),
+      });
+    });
+
+    it('throws NotFoundException (never a distinguishing 403) for a caller who is neither the owner nor a caretaker', async () => {
+      const pet = { _id: petId, owner: new Types.ObjectId(otherOwnerId) };
+      petModel.findById.mockResolvedValue(pet);
+      caretakerModel.exists.mockResolvedValue(null);
+
+      await expect(service.findAccessiblePet(ownerId, petId)).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+
+    it('findOne delegates directly to findAccessiblePet', async () => {
+      const pet = { _id: petId, owner: new Types.ObjectId(ownerId) };
+      petModel.findById.mockResolvedValue(pet);
+
+      const result = await service.findOne(ownerId, petId);
+
+      expect(result).toBe(pet);
+      expect(petModel.findById).toHaveBeenCalledWith(petId);
     });
   });
 
