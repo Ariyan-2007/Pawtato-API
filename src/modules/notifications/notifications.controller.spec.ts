@@ -1,4 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { ConfigService } from '@nestjs/config';
 import { NotificationsController } from './notifications.controller';
 import { NotificationsService } from './notifications.service';
 import { DevicePlatform } from '../../common/enums/device-platform.enum';
@@ -9,7 +10,10 @@ describe('NotificationsController', () => {
   let notificationsService: {
     registerDeviceToken: jest.Mock;
     unregisterDeviceToken: jest.Mock;
+    registerWebPushSubscription: jest.Mock;
+    unregisterWebPushSubscription: jest.Mock;
   };
+  let configService: { get: jest.Mock };
 
   const user = { sub: 'user-1' } as JwtPayload;
 
@@ -17,12 +21,16 @@ describe('NotificationsController', () => {
     notificationsService = {
       registerDeviceToken: jest.fn(),
       unregisterDeviceToken: jest.fn(),
+      registerWebPushSubscription: jest.fn(),
+      unregisterWebPushSubscription: jest.fn(),
     };
+    configService = { get: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [NotificationsController],
       providers: [
         { provide: NotificationsService, useValue: notificationsService },
+        { provide: ConfigService, useValue: configService },
       ],
     }).compile();
 
@@ -54,6 +62,51 @@ describe('NotificationsController', () => {
         'user-1',
         'abc',
       );
+    });
+  });
+
+  describe('getVapidPublicKey', () => {
+    it('returns the configured VAPID public key', () => {
+      configService.get.mockReturnValue('a-public-key');
+
+      expect(controller.getVapidPublicKey()).toEqual({
+        publicKey: 'a-public-key',
+      });
+      expect(configService.get).toHaveBeenCalledWith('vapid.publicKey');
+    });
+
+    it('returns null when push is not configured', () => {
+      configService.get.mockReturnValue(undefined);
+
+      expect(controller.getVapidPublicKey()).toEqual({ publicKey: null });
+    });
+  });
+
+  describe('registerWebPushSubscription', () => {
+    it("delegates to the service with the caller's id", async () => {
+      const dto = {
+        endpoint: 'https://push.example.com/abc',
+        keys: { p256dh: 'p256dh-value', auth: 'auth-value' },
+      };
+
+      await controller.registerWebPushSubscription(user, dto);
+
+      expect(
+        notificationsService.registerWebPushSubscription,
+      ).toHaveBeenCalledWith('user-1', dto);
+    });
+  });
+
+  describe('unregisterWebPushSubscription', () => {
+    it("delegates to the service with the caller's id and the endpoint", async () => {
+      await controller.unregisterWebPushSubscription(
+        user,
+        'https://push.example.com/abc',
+      );
+
+      expect(
+        notificationsService.unregisterWebPushSubscription,
+      ).toHaveBeenCalledWith('user-1', 'https://push.example.com/abc');
     });
   });
 });
