@@ -17,6 +17,7 @@ import { DeviceToken, DeviceTokenSchema } from './schemas/device-token.schema';
 import { EmailChannel } from './channels/email.channel';
 import { SmsChannel } from './channels/sms.channel';
 import { PushChannel } from './channels/push.channel';
+import { WebPushService } from './web-push.service';
 import { DomainEventsListener } from './listeners/domain-events.listener';
 import { NOTIFICATION_CHANNELS } from './notifications.constants';
 import { NotificationChannel } from './interfaces/notification-channel.interface';
@@ -71,6 +72,7 @@ import { VaccinationsModule } from '../vaccinations/vaccinations.module';
     EmailChannel,
     SmsChannel,
     PushChannel,
+    WebPushService,
     DomainEventsListener,
     {
       provide: NOTIFICATION_CHANNELS,

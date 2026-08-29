@@ -17,16 +17,39 @@ export class DeviceToken {
   })
   userId!: Types.ObjectId;
 
-  // Unique across all users, not just per-user — a token that gets
-  // re-registered under a different account (device changed hands, or the
-  // same user logged in again and the OS handed back the same token) should
-  // move rather than duplicate; see NotificationsService.registerDeviceToken.
+  // Opaque FCM/APNs-style push token — used for IOS/ANDROID once a native
+  // app exists (still backlog; see PAWTATO_ROADMAP.md Phase 9). Not set for
+  // WEB rows, which use `endpoint`/`p256dh`/`authSecret` instead — a real
+  // browser PushSubscription has no single opaque token, so it can't share
+  // this field. Unique-but-sparse: `sparse` means multiple documents with
+  // no `token` at all (every WEB row) don't collide on Mongo's unique index,
+  // same reasoning as the `endpoint` index below. A token that gets
+  // re-registered under a different account moves rather than duplicates;
+  // see NotificationsService.registerDeviceToken.
   @Prop({
-    required: true,
     unique: true,
+    sparse: true,
     index: true,
   })
-  token!: string;
+  token?: string;
+
+  // Real Web Push (VAPID) subscription fields — what a browser's
+  // `PushManager.subscribe()` actually returns, per the Web Push protocol.
+  // `endpoint` is the subscription's own unique identity (the push
+  // service's per-device URL), so it plays the same "identity to upsert on"
+  // role for WEB that `token` plays for native platforms.
+  @Prop({
+    unique: true,
+    sparse: true,
+    index: true,
+  })
+  endpoint?: string;
+
+  @Prop()
+  p256dh?: string;
+
+  @Prop()
+  authSecret?: string;
 
   @Prop({
     type: String,

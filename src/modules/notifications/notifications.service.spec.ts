@@ -26,6 +26,7 @@ describe('NotificationsService', () => {
     findOneAndUpdate: jest.Mock;
     findOneAndDelete: jest.Mock;
     find: jest.Mock;
+    deleteOne: jest.Mock;
   };
 
   const userId = new Types.ObjectId().toString();
@@ -45,6 +46,7 @@ describe('NotificationsService', () => {
       findOneAndUpdate: jest.fn(),
       findOneAndDelete: jest.fn(),
       find: jest.fn(),
+      deleteOne: jest.fn(),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -260,6 +262,70 @@ describe('NotificationsService', () => {
 
       expect(deviceTokenModel.find).toHaveBeenCalledWith({
         userId: new Types.ObjectId(userId),
+      });
+    });
+  });
+
+  describe('registerWebPushSubscription', () => {
+    it('upserts on the endpoint alone, storing the WEB platform and unpacked keys', async () => {
+      deviceTokenModel.findOneAndUpdate.mockResolvedValue({
+        endpoint: 'https://push.example.com/abc',
+      });
+
+      await service.registerWebPushSubscription(userId, {
+        endpoint: 'https://push.example.com/abc',
+        keys: { p256dh: 'p256dh-value', auth: 'auth-value' },
+      });
+
+      expect(deviceTokenModel.findOneAndUpdate).toHaveBeenCalledWith(
+        { endpoint: 'https://push.example.com/abc' },
+        {
+          userId: expect.any(Types.ObjectId) as Types.ObjectId,
+          platform: DevicePlatform.WEB,
+          p256dh: 'p256dh-value',
+          authSecret: 'auth-value',
+        },
+        { upsert: true, new: true },
+      );
+    });
+  });
+
+  describe('unregisterWebPushSubscription', () => {
+    it('throws NotFoundException for a subscription not owned by the caller', async () => {
+      deviceTokenModel.findOneAndDelete.mockResolvedValue(null);
+
+      await expect(
+        service.unregisterWebPushSubscription(
+          userId,
+          'https://push.example.com/abc',
+        ),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('removes the subscription when owned by the caller', async () => {
+      deviceTokenModel.findOneAndDelete.mockResolvedValue({
+        endpoint: 'https://push.example.com/abc',
+      });
+
+      await expect(
+        service.unregisterWebPushSubscription(
+          userId,
+          'https://push.example.com/abc',
+        ),
+      ).resolves.toEqual({ message: 'Web push subscription removed' });
+    });
+  });
+
+  describe('removeDeviceTokenByEndpoint', () => {
+    it('deletes by endpoint alone and never throws when nothing matched', async () => {
+      deviceTokenModel.deleteOne.mockResolvedValue({ deletedCount: 0 });
+
+      await expect(
+        service.removeDeviceTokenByEndpoint('https://push.example.com/gone'),
+      ).resolves.toBeUndefined();
+
+      expect(deviceTokenModel.deleteOne).toHaveBeenCalledWith({
+        endpoint: 'https://push.example.com/gone',
       });
     });
   });

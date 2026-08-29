@@ -9,11 +9,13 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 
 import {
   ApiBearerAuth,
   ApiOperation,
   ApiParam,
+  ApiQuery,
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
@@ -23,6 +25,7 @@ import { ParseMongoIdPipe } from '../../common/pipes/parse-mongo-id.pipe';
 import { NotificationQueryDto } from './dto/notification-query.dto';
 import { BulkDeleteNotificationsDto } from './dto/bulk-delete-notifications.dto';
 import { RegisterDeviceTokenDto } from './dto/register-device-token.dto';
+import { RegisterWebPushSubscriptionDto } from './dto/register-web-push-subscription.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import type { JwtPayload } from '../auth/interfaces/jwt-payload.interface';
@@ -32,7 +35,10 @@ import type { JwtPayload } from '../auth/interfaces/jwt-payload.interface';
 @UseGuards(JwtAuthGuard)
 @Controller('notifications')
 export class NotificationsController {
-  constructor(private readonly notificationsService: NotificationsService) {}
+  constructor(
+    private readonly notificationsService: NotificationsService,
+    private readonly configService: ConfigService,
+  ) {}
 
   @ApiOperation({ summary: "List the current user's in-app notifications" })
   @ApiResponse({
@@ -93,30 +99,13 @@ export class NotificationsController {
   }
 
   @ApiOperation({
-    summary: 'Delete a single notification, regardless of priority',
-  })
-  @ApiParam({ name: 'id', description: 'Notification ID' })
-  @ApiResponse({ status: 200, description: 'Notification deleted.' })
-  @ApiResponse({
-    status: 404,
-    description: 'Notification not found or not owned by the caller.',
-  })
-  @Delete(':id')
-  deleteOne(
-    @CurrentUser() user: JwtPayload,
-
-    @Param('id', ParseMongoIdPipe)
-    notificationId: string,
-  ) {
-    return this.notificationsService.delete(user.sub, notificationId);
-  }
-
-  @ApiOperation({
-    summary: "Register a push-notification token for the caller's device",
+    summary: "Register a native (FCM/APNs) push token for the caller's device",
     description:
-      'Idempotent per token: re-registering the same token (e.g. after re-login) updates ' +
-      'its owner/platform rather than creating a duplicate. Push sending is currently a ' +
-      'stub (logs instead of calling FCM/APNs) — see PAWTATO_ROADMAP.md Phase 17.',
+      'For IOS/ANDROID once a native app exists — not for browsers. Idempotent per token: ' +
+      're-registering the same token (e.g. after re-login) updates its owner/platform rather ' +
+      'than creating a duplicate. No native provider is wired up yet (mobile apps are still ' +
+      'backlog — see PAWTATO_ROADMAP.md Phase 9), so PushChannel does not act on rows created ' +
+      'here. For a real browser, use POST /notifications/web-push-subscriptions instead.',
   })
   @ApiResponse({ status: 201, description: 'Device token registered.' })
   @Post('device-tokens')
@@ -146,5 +135,96 @@ export class NotificationsController {
     token: string,
   ) {
     return this.notificationsService.unregisterDeviceToken(user.sub, token);
+  }
+
+  @ApiOperation({
+    summary: 'Get the VAPID public key the frontend needs to subscribe',
+    description:
+      'Pass this directly as `applicationServerKey` to `PushManager.subscribe()`. Not a ' +
+      'secret — every subscribing browser receives it — but requires auth like the rest of ' +
+      "this controller, since it's only ever needed once the user is already signed in.",
+  })
+  @ApiResponse({
+    status: 200,
+    description:
+      'The base64url-encoded VAPID public key, or null if push is not configured on this server.',
+  })
+  @Get('vapid-public-key')
+  getVapidPublicKey() {
+    return {
+      publicKey: this.configService.get<string>('vapid.publicKey') ?? null,
+    };
+  }
+
+  @ApiOperation({
+    summary: 'Register a real browser Web Push subscription for the caller',
+    description:
+      "Shaped to match PushSubscription.toJSON() exactly — POST the browser's subscription " +
+      'object with no transformation. Idempotent per `endpoint`: re-subscribing (re-login, ' +
+      'service-worker update) updates its owner rather than creating a duplicate. This is ' +
+      'the endpoint that actually receives real push notifications via PushChannel.',
+  })
+  @ApiResponse({
+    status: 201,
+    description: 'Web push subscription registered.',
+  })
+  @Post('web-push-subscriptions')
+  registerWebPushSubscription(
+    @CurrentUser() user: JwtPayload,
+
+    @Body()
+    dto: RegisterWebPushSubscriptionDto,
+  ) {
+    return this.notificationsService.registerWebPushSubscription(user.sub, dto);
+  }
+
+  @ApiOperation({
+    summary: "Unregister one of the caller's web push subscriptions",
+  })
+  @ApiQuery({
+    name: 'endpoint',
+    description: "The subscription's endpoint URL to remove",
+  })
+  @ApiResponse({ status: 200, description: 'Web push subscription removed.' })
+  @ApiResponse({
+    status: 404,
+    description: 'Subscription not found or not owned by the caller.',
+  })
+  @Delete('web-push-subscriptions')
+  unregisterWebPushSubscription(
+    @CurrentUser() user: JwtPayload,
+
+    @Query('endpoint')
+    endpoint: string,
+  ) {
+    return this.notificationsService.unregisterWebPushSubscription(
+      user.sub,
+      endpoint,
+    );
+  }
+
+  // Registered last among the DELETE routes deliberately: Nest/Express
+  // matches routes in registration order, and a bare `:id` segment would
+  // otherwise swallow every static DELETE path above it (e.g.
+  // `DELETE /notifications/web-push-subscriptions` would hit this handler
+  // with notificationId="web-push-subscriptions" instead of its own route)
+  // — the same class of bug fixed for `GET /pets/statistics` in Phase 1.
+  @ApiOperation({
+    summary: 'Delete a single notification, regardless of priority',
+  })
+  @ApiParam({ name: 'id', description: 'Notification ID' })
+  @ApiResponse({ status: 200, description: 'Notification deleted.' })
+  @ApiResponse({
+    status: 404,
+    description: 'Notification not found or not owned by the caller.',
+  })
+  @Delete(':id')
+  deleteOne(
+    @CurrentUser() user: JwtPayload,
+
+    @Param('id', ParseMongoIdPipe)
+    notificationId: string,
+  ) {
+    return this.notificationsService.delete(user.sub, notificationId);
   }
 }

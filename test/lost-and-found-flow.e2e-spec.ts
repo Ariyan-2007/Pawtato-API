@@ -263,6 +263,117 @@ describe('Lost & found flow (e2e)', () => {
     expect(entries.some((pet) => pet.publicCode === tagPublicCode)).toBe(false);
   });
 
+  // Phase 18 (Nearby Lost-Pet Discovery) shipped without e2e coverage —
+  // this closes that gap against a real DB with a real 2dsphere index,
+  // not just the unit-mocked aggregation assertions it had before.
+  describe('nearby lost-pet discovery (geo search)', () => {
+    const gulshanLat = 23.7925;
+    const gulshanLng = 90.4078;
+    // Chittagong — genuinely far from Gulshan, well outside any radius used below.
+    const chittagongLat = 22.3569;
+    const chittagongLng = 91.7832;
+
+    it('reports a pet lost with coordinates and finds it via nearby search within radius', async () => {
+      const createRes = await request(app.getHttpServer())
+        .post('/api/pets')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send({ name: 'Rex', species: 'Dog', breed: 'Mixed', gender: 'MALE' })
+        .expect(201);
+
+      const geoPetId = data<{ _id: string }>(createRes)._id;
+
+      await request(app.getHttpServer())
+        .patch(`/api/pets/${geoPetId}/report-lost`)
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send({
+          lastSeenLocation: 'Gulshan, Dhaka',
+          lostDescription: 'Seen near the lake.',
+          emergencyContact: '+8801XXXXXXXXX',
+          lat: gulshanLat,
+          lng: gulshanLng,
+        })
+        .expect(200);
+
+      const nearbyRes = await request(app.getHttpServer())
+        .get('/api/public/lost-pets/nearby')
+        .query({ lat: gulshanLat, lng: gulshanLng, radiusKm: 5 })
+        .expect(200);
+
+      const entries =
+        data<Array<{ name: string; distanceKm: number }>>(nearbyRes);
+      const match = entries.find((pet) => pet.name === 'Rex');
+      expect(match).toBeDefined();
+      expect(match?.distanceKm).toBeLessThanOrEqual(5);
+
+      const farRes = await request(app.getHttpServer())
+        .get('/api/public/lost-pets/nearby')
+        .query({ lat: chittagongLat, lng: chittagongLng, radiusKm: 5 })
+        .expect(200);
+
+      expect(
+        data<Array<{ name: string }>>(farRes).some((pet) => pet.name === 'Rex'),
+      ).toBe(false);
+
+      // Cleanup so this pet doesn't leak into the rate-limit block below.
+      await request(app.getHttpServer())
+        .patch(`/api/pets/${geoPetId}/report-found`)
+        .set('Authorization', `Bearer ${accessToken}`)
+        .expect(200);
+    });
+
+    it('a pet reported lost with only a text location is absent from geo search but present in the plain listing', async () => {
+      const createRes = await request(app.getHttpServer())
+        .post('/api/pets')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send({
+          name: 'Whiskers',
+          species: 'Cat',
+          breed: 'Mixed',
+          gender: 'FEMALE',
+        })
+        .expect(201);
+
+      const textOnlyPetId = data<{ _id: string }>(createRes)._id;
+
+      await request(app.getHttpServer())
+        .patch(`/api/pets/${textOnlyPetId}/report-lost`)
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send({
+          lastSeenLocation: 'Somewhere in Dhaka',
+          lostDescription: 'No coordinates supplied.',
+          emergencyContact: '+8801XXXXXXXXX',
+        })
+        .expect(200);
+
+      const nearbyRes = await request(app.getHttpServer())
+        .get('/api/public/lost-pets/nearby')
+        .query({ lat: gulshanLat, lng: gulshanLng, radiusKm: 100 })
+        .expect(200);
+
+      expect(
+        data<Array<{ name: string }>>(nearbyRes).some(
+          (pet) => pet.name === 'Whiskers',
+        ),
+      ).toBe(false);
+
+      const listRes = await request(app.getHttpServer())
+        .get('/api/public/lost-pets')
+        .expect(200);
+
+      expect(
+        data<Array<{ name: string }>>(listRes).some(
+          (pet) => pet.name === 'Whiskers',
+        ),
+      ).toBe(true);
+
+      // Cleanup so this pet doesn't leak into the rate-limit block below.
+      await request(app.getHttpServer())
+        .patch(`/api/pets/${textOnlyPetId}/report-found`)
+        .set('Authorization', `Bearer ${accessToken}`)
+        .expect(200);
+    });
+  });
+
   describe('ownership bypass attempts', () => {
     let intruderAccessToken: string;
 

@@ -26,7 +26,12 @@ export async function createTestApp(
 
   const moduleFixture = await builder.compile();
 
-  const app = moduleFixture.createNestApplication<NestExpressApplication>();
+  const app = moduleFixture.createNestApplication<NestExpressApplication>({
+    // Mirrors main.ts — only the Stripe webhook route reads req.rawBody, but
+    // it must be enabled app-wide (it only adds the field, never disables
+    // JSON parsing for any other route) for that spec to work under supertest.
+    rawBody: true,
+  });
 
   app.setGlobalPrefix('api');
 

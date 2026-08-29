@@ -52,6 +52,12 @@ export default () => ({
     tagUnitPriceCents: parseInt(process.env.TAG_UNIT_PRICE_CENTS || '999', 10),
   },
 
+  vapid: {
+    publicKey: process.env.VAPID_PUBLIC_KEY,
+    privateKey: process.env.VAPID_PRIVATE_KEY,
+    subject: process.env.VAPID_SUBJECT || 'mailto:no-reply@pawtato.app',
+  },
+
   dating: {
     // How long a swiped-on pet (LIKE or PASS, as long as it never became an
     // ACTIVE match) stays hidden from that pet's discover() pool before it's

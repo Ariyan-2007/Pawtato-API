@@ -58,4 +58,12 @@ export const envValidationSchema = Joi.object({
   STRIPE_WEBHOOK_SECRET: Joi.string().optional(),
   TAG_UNIT_PRICE_CENTS: Joi.number().integer().min(1).default(999),
   STRIPE_CURRENCY: Joi.string().lowercase().default('usd'),
+
+  // Optional — same "additive feature, throws a clear error at use rather
+  // than failing boot" pattern as Stripe above. Without these, PushChannel
+  // logs a warning and skips sending instead of crashing the domain-event
+  // listener that calls it. Generate a pair with `npm run vapid:generate`.
+  VAPID_PUBLIC_KEY: Joi.string().optional(),
+  VAPID_PRIVATE_KEY: Joi.string().optional(),
+  VAPID_SUBJECT: Joi.string().optional(),
 });

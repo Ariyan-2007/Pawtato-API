@@ -13,6 +13,8 @@ import {
 } from './schemas/device-token.schema';
 import { NotificationQueryDto } from './dto/notification-query.dto';
 import { RegisterDeviceTokenDto } from './dto/register-device-token.dto';
+import { RegisterWebPushSubscriptionDto } from './dto/register-web-push-subscription.dto';
+import { DevicePlatform } from '../../common/enums/device-platform.enum';
 import { renderPlainTextTemplate } from '../../mail/mail-template.util';
 import { NotificationPriority } from './enums/notification-priority.enum';
 import {
@@ -236,5 +238,47 @@ export class NotificationsService {
 
   async getDeviceTokens(userId: string) {
     return this.deviceTokenModel.find({ userId: new Types.ObjectId(userId) });
+  }
+
+  // Upserts on `endpoint` alone, for the same reason registerDeviceToken
+  // upserts on `token` alone — a subscription belongs to exactly one
+  // browser instance, and re-subscribing (re-login, service-worker update)
+  // should move it to the current owner rather than duplicate it.
+  async registerWebPushSubscription(
+    userId: string,
+    dto: RegisterWebPushSubscriptionDto,
+  ) {
+    return this.deviceTokenModel.findOneAndUpdate(
+      { endpoint: dto.endpoint },
+      {
+        userId: new Types.ObjectId(userId),
+        platform: DevicePlatform.WEB,
+        p256dh: dto.keys.p256dh,
+        authSecret: dto.keys.auth,
+      },
+      { upsert: true, new: true },
+    );
+  }
+
+  async unregisterWebPushSubscription(userId: string, endpoint: string) {
+    const result = await this.deviceTokenModel.findOneAndDelete({
+      endpoint,
+      userId: new Types.ObjectId(userId),
+    });
+
+    if (!result) {
+      throw new NotFoundException('Web push subscription not found');
+    }
+
+    return { message: 'Web push subscription removed' };
+  }
+
+  // Called by PushChannel when a push service reports a subscription as
+  // gone (404/410) — the browser unsubscribed, cleared site data, or the
+  // subscription expired. Not user-facing, so it's a quiet no-op if the row
+  // is already gone rather than throwing (a second concurrent failed send
+  // for the same stale subscription shouldn't error).
+  async removeDeviceTokenByEndpoint(endpoint: string) {
+    await this.deviceTokenModel.deleteOne({ endpoint });
   }
 }
