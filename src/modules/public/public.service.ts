@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 
 import { Pet, PetDocument } from '../pets/schemas/pet.schema';
 import { Tag, TagDocument } from '../tags/schemas/tag.schema';
@@ -8,6 +8,7 @@ import { TagStatus } from '../../common/enums/tag-status.enum';
 import { ScansService } from '../scans/scans.service';
 import { FoundReportsService } from '../found-reports/found-reports.service';
 import { CreateFoundReportDto } from '../found-reports/dto/create-found-report.dto';
+import { NearbyLostPetsQueryDto } from './dto/nearby-lost-pets-query.dto';
 
 @Injectable()
 export class PublicService {
@@ -139,6 +140,75 @@ export class PublicService {
       lastSeenLocation: pet.lastSeenLocation,
       reward: pet.reward,
       lostDate: pet.lostDate,
+    }));
+  }
+
+  // Same public-safe field set as getLostPets(), plus a computed distance —
+  // uses $geoNear (an aggregation-only stage) rather than .find()'s $near
+  // because $geoNear is the only geospatial operator that returns the
+  // computed distance alongside each document.
+  async getNearbyLostPets(query: NearbyLostPetsQueryDto) {
+    const { lat, lng, radiusKm } = query;
+
+    const pets = await this.petModel.aggregate<{
+      _id: Types.ObjectId;
+      name: string;
+      species: string;
+      breed: string;
+      profileImage: string;
+      lastSeenLocation?: string;
+      reward?: number;
+      lostDate?: Date;
+      distanceKm: number;
+    }>([
+      {
+        $geoNear: {
+          near: { type: 'Point', coordinates: [lng, lat] },
+          distanceField: 'distanceKm',
+          distanceMultiplier: 1 / 1000, // meters -> km
+          maxDistance: radiusKm * 1000,
+          query: { isLost: true },
+          spherical: true,
+        },
+      },
+      {
+        $project: {
+          name: 1,
+          species: 1,
+          breed: 1,
+          profileImage: 1,
+          lastSeenLocation: 1,
+          reward: 1,
+          lostDate: 1,
+          distanceKm: 1,
+        },
+      },
+    ]);
+
+    const petIds = pets.map((pet) => pet._id);
+
+    const tags = await this.tagModel
+      .find({
+        assignedPetId: { $in: petIds },
+        status: TagStatus.ASSIGNED,
+      })
+      .select('assignedPetId publicCode')
+      .lean();
+
+    const publicCodeByPetId = new Map(
+      tags.map((tag) => [String(tag.assignedPetId), tag.publicCode]),
+    );
+
+    return pets.map((pet) => ({
+      publicCode: publicCodeByPetId.get(String(pet._id)) ?? null,
+      name: pet.name,
+      species: pet.species,
+      breed: pet.breed,
+      profileImage: pet.profileImage,
+      lastSeenLocation: pet.lastSeenLocation,
+      reward: pet.reward,
+      lostDate: pet.lostDate,
+      distanceKm: Math.round(pet.distanceKm * 10) / 10,
     }));
   }
 

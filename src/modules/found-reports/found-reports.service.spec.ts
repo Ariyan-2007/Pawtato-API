@@ -28,7 +28,11 @@ describe('FoundReportsService', () => {
     deleteMany: jest.Mock;
   };
   let tagsService: { findByPublicCode: jest.Mock; findOwnedById: jest.Mock };
-  let petsService: { findOwnedPet: jest.Mock; findWithOwner: jest.Mock };
+  let petsService: {
+    findOwnedPet: jest.Mock;
+    findAccessiblePet: jest.Mock;
+    findWithOwner: jest.Mock;
+  };
   let activityService: { log: jest.Mock };
   let storageProvider: { deleteByUrl: jest.Mock };
 
@@ -59,6 +63,7 @@ describe('FoundReportsService', () => {
     };
     petsService = {
       findOwnedPet: jest.fn(),
+      findAccessiblePet: jest.fn(),
       findWithOwner: jest.fn().mockResolvedValue(null),
     };
     activityService = { log: jest.fn().mockResolvedValue(undefined) };
@@ -84,6 +89,34 @@ describe('FoundReportsService', () => {
 
   it('should be defined', () => {
     expect(service).toBeDefined();
+  });
+
+  describe('findForOwnedPet', () => {
+    it('authorizes via findAccessiblePet (owner or caretaker), then lists reports for the pet', async () => {
+      petsService.findAccessiblePet.mockResolvedValue({ _id: petId });
+      const sort = jest.fn().mockResolvedValue([]);
+      foundReportModel.find.mockReturnValue({ sort });
+
+      await service.findForOwnedPet('user-1', petId.toString());
+
+      expect(petsService.findAccessiblePet).toHaveBeenCalledWith(
+        'user-1',
+        petId.toString(),
+      );
+      expect(foundReportModel.find).toHaveBeenCalledWith({
+        pet: petId,
+      });
+    });
+
+    it('propagates the NotFoundException when the caller has no access to the pet', async () => {
+      const notFound = new Error('Pet not found');
+      petsService.findAccessiblePet.mockRejectedValue(notFound);
+
+      await expect(
+        service.findForOwnedPet('user-1', petId.toString()),
+      ).rejects.toThrow(notFound);
+      expect(foundReportModel.find).not.toHaveBeenCalled();
+    });
   });
 
   describe('create', () => {

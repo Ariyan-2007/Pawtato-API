@@ -29,7 +29,8 @@ export class ScansController {
   })
   @ApiResponse({
     status: 404,
-    description: 'Pet not found or not owned by the caller.',
+    description:
+      'Pet not found, or the caller has no access to it (not the owner and not an authorized caretaker).',
   })
   @Get()
   findAll(

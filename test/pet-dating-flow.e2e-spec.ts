@@ -129,6 +129,29 @@ describe('Pet dating flow (e2e)', () => {
     });
   }
 
+  // DatingChatNotificationListener reacts to the same DATING_MESSAGE_SENT
+  // domain event DatingGateway does, via EventEmitter2's plain (non-awaited)
+  // `emit()` — the same eventual-consistency gap the socket assertions above
+  // work around with `waitForEvent`. There's no socket hook for a REST-only
+  // assertion like "the notification now exists", so this polls the unread
+  // summary instead of asserting immediately after a message send.
+  async function pollUntil<T>(
+    fn: () => Promise<T>,
+    predicate: (value: T) => boolean,
+    timeoutMs = 2000,
+    intervalMs = 50,
+  ): Promise<T> {
+    const deadline = Date.now() + timeoutMs;
+    let last: T = await fn();
+
+    while (!predicate(last) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+      last = await fn();
+    }
+
+    return last;
+  }
+
   it('promotes a freshly-registered account to ADMIN', async () => {
     const { user } = await registerAndVerify('Dating Admin', adminEmail);
 
@@ -478,6 +501,204 @@ describe('Pet dating flow (e2e)', () => {
 
     const messages = data<Array<{ content: string }>>(res);
     expect(messages.some((m) => m.content.includes('playdate'))).toBe(true);
+  });
+
+  // Dedicated Dating -> Match & Chats unread system (see
+  // PAWTATO_FRONTEND_BLUEPRINT.md's "Dating Chat Notifications" contract):
+  // entirely separate storage/API from the general Notifications system,
+  // covering pet-to-pet identification, authorization, multi-message
+  // conversations, and the read/delete semantics.
+  describe('dating chat notifications (dedicated unread system, Phase 14)', () => {
+    async function unreadSummary(token: string) {
+      const res = await request(app.getHttpServer())
+        .get('/api/dating/notifications/unread-summary')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(200);
+
+      return data<{ totalUnread: number; matchChatsUnread: number }>(res);
+    }
+
+    it("owner B has one unread dating-chat notification, correctly attributed to owner A's cat", async () => {
+      const summary = await pollUntil(
+        () => unreadSummary(ownerBAccessToken),
+        (s) => s.totalUnread >= 1,
+      );
+
+      expect(summary.matchChatsUnread).toBe(summary.totalUnread);
+
+      const listRes = await request(app.getHttpServer())
+        .get('/api/dating/notifications')
+        .set('Authorization', `Bearer ${ownerBAccessToken}`)
+        .expect(200);
+
+      const conversations = data<
+        Array<{
+          matchId: string;
+          senderPetId: string;
+          senderPetName: string;
+          recipientPetId: string;
+          unreadCount: number;
+        }>
+      >(listRes);
+
+      const thisMatch = conversations.find((c) => c.matchId === matchId);
+      expect(thisMatch).toBeDefined();
+      // Correct pet-to-pet identification: the sender is owner A's cat (the
+      // one that actually sent the message), the recipient is owner B's cat
+      // — not just "owner A" and "owner B" at the account level.
+      expect(thisMatch!.senderPetId).toBe(petAId);
+      expect(thisMatch!.senderPetName).toBe('Dating Cat A');
+      expect(thisMatch!.recipientPetId).toBe(petBId);
+    });
+
+    it('owner A (the sender) has no unread dating-chat notifications of their own', async () => {
+      const summary = await unreadSummary(ownerAAccessToken);
+      expect(summary.totalUnread).toBe(0);
+    });
+
+    it('a third, unrelated user sees no unread dating-chat notifications, and cannot mark this conversation read', async () => {
+      // Reuses the already-registered admin account as "some other user
+      // entirely unrelated to this match" — avoids burning another slot in
+      // the register endpoint's 5/min throttle window (see the dedicated
+      // intruder registrations already spent elsewhere in this file).
+      const summary = await unreadSummary(adminAccessToken);
+      expect(summary.totalUnread).toBe(0);
+
+      await request(app.getHttpServer())
+        .post(`/api/dating/matches/${matchId}/read`)
+        .set('Authorization', `Bearer ${adminAccessToken}`)
+        .expect(404);
+    });
+
+    it('opening the chat deletes the notification permanently — not a soft IsRead flag', async () => {
+      await pollUntil(
+        () => unreadSummary(ownerBAccessToken),
+        (s) => s.totalUnread >= 1,
+      );
+
+      const readRes = await request(app.getHttpServer())
+        .post(`/api/dating/matches/${matchId}/read`)
+        .set('Authorization', `Bearer ${ownerBAccessToken}`)
+        .expect(201);
+
+      expect(data<{ deletedCount: number }>(readRes).deletedCount).toBe(1);
+
+      const summary = await unreadSummary(ownerBAccessToken);
+      expect(summary.totalUnread).toBe(0);
+
+      const listRes = await request(app.getHttpServer())
+        .get('/api/dating/notifications')
+        .set('Authorization', `Bearer ${ownerBAccessToken}`)
+        .expect(200);
+      expect(data<Array<unknown>>(listRes)).toEqual([]);
+    });
+
+    it('re-reading an already-clear conversation is a harmless no-op', async () => {
+      const res = await request(app.getHttpServer())
+        .post(`/api/dating/matches/${matchId}/read`)
+        .set('Authorization', `Bearer ${ownerBAccessToken}`)
+        .expect(201);
+
+      expect(data<{ deletedCount: number }>(res).deletedCount).toBe(0);
+    });
+
+    it('three messages in one conversation collapse into a single chat entry with unreadCount 3, and one read call clears all three', async () => {
+      for (const content of [
+        'Unread message 1',
+        'Unread message 2',
+        'Unread message 3',
+      ]) {
+        await request(app.getHttpServer())
+          .post(`/api/dating/matches/${matchId}/messages`)
+          .set('Authorization', `Bearer ${ownerAAccessToken}`)
+          .send({ content })
+          .expect(201);
+      }
+
+      const summary = await pollUntil(
+        () => unreadSummary(ownerBAccessToken),
+        (s) => s.totalUnread >= 3,
+      );
+      expect(summary.totalUnread).toBe(3);
+
+      const listRes = await request(app.getHttpServer())
+        .get('/api/dating/notifications')
+        .set('Authorization', `Bearer ${ownerBAccessToken}`)
+        .expect(200);
+      const conversations =
+        data<Array<{ matchId: string; unreadCount: number }>>(listRes);
+      expect(
+        conversations.find((c) => c.matchId === matchId)?.unreadCount,
+      ).toBe(3);
+
+      // A single mark-as-read call clears all three — the frontend never
+      // needs one API call per unread message.
+      const readRes = await request(app.getHttpServer())
+        .post(`/api/dating/matches/${matchId}/read`)
+        .set('Authorization', `Bearer ${ownerBAccessToken}`)
+        .expect(201);
+      expect(data<{ deletedCount: number }>(readRes).deletedCount).toBe(3);
+
+      const clearedSummary = await unreadSummary(ownerBAccessToken);
+      expect(clearedSummary.totalUnread).toBe(0);
+    });
+
+    it('a message sent over the socket also produces a dedicated dating-chat notification', async () => {
+      const socketA = await connectSocket(ownerAAccessToken);
+      socketA.emit('sendMessage', { matchId, content: 'Sent live!' });
+
+      const summary = await pollUntil(
+        () => unreadSummary(ownerBAccessToken),
+        (s) => s.totalUnread >= 1,
+      );
+      expect(summary.totalUnread).toBe(1);
+
+      await request(app.getHttpServer())
+        .post(`/api/dating/matches/${matchId}/read`)
+        .set('Authorization', `Bearer ${ownerBAccessToken}`)
+        .expect(201);
+
+      socketA.close();
+    });
+
+    it('this dedicated system never appears in, or is affected by, the general Notifications API', async () => {
+      await request(app.getHttpServer())
+        .post(`/api/dating/matches/${matchId}/messages`)
+        .set('Authorization', `Bearer ${ownerAAccessToken}`)
+        .send({ content: 'Should never surface as a general notification' })
+        .expect(201);
+
+      await pollUntil(
+        () => unreadSummary(ownerBAccessToken),
+        (s) => s.totalUnread >= 1,
+      );
+
+      const res = await request(app.getHttpServer())
+        .get('/api/notifications')
+        .set('Authorization', `Bearer ${ownerBAccessToken}`)
+        .query({ limit: 200 })
+        .expect(200);
+
+      const notifications = data<{
+        notifications: Array<{ type: string; message: string }>;
+      }>(res).notifications;
+
+      expect(
+        notifications.some((n) =>
+          n.message.includes('Should never surface as a general notification'),
+        ),
+      ).toBe(false);
+      expect(notifications.every((n) => n.type !== 'dating.message-sent')).toBe(
+        true,
+      );
+
+      // Drain the unread state so later assertions in this file (e.g. the
+      // deactivation/unmatch/delete sections below) start from a clean slate.
+      await request(app.getHttpServer())
+        .post(`/api/dating/matches/${matchId}/read`)
+        .set('Authorization', `Bearer ${ownerBAccessToken}`)
+        .expect(201);
+    });
   });
 
   describe('real-time chat over the Socket.IO gateway (Phase 12)', () => {

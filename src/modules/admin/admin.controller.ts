@@ -36,6 +36,8 @@ import { AdminIdentityVerificationQueryDto } from './dto/admin-identity-verifica
 import { RejectIdentityVerificationDto } from './dto/reject-identity-verification.dto';
 import { DashboardStatsDto } from './dto/dashboard-stats.dto';
 import { DashboardAnalyticsDto } from './dto/dashboard-analytics.dto';
+import { AdminTagOrderQueryDto } from '../tag-orders/dto/admin-tag-order-query.dto';
+import { ShipTagOrderDto } from '../tag-orders/dto/ship-tag-order.dto';
 
 @ApiTags('Admin')
 @ApiBearerAuth('JWT-auth')
@@ -389,5 +391,43 @@ export class AdminController {
       id,
       dto.reason,
     );
+  }
+
+  @ApiOperation({ summary: 'List QR tag orders (admin only)' })
+  @ApiResponse({
+    status: 200,
+    description: 'Paginated list of tag orders.',
+  })
+  @Get('tag-orders')
+  findAllTagOrders(
+    @Query()
+    query: AdminTagOrderQueryDto,
+  ) {
+    return this.adminService.tagOrders(query);
+  }
+
+  @ApiOperation({
+    summary: 'Mark a paid tag order as shipped (admin only)',
+    description:
+      'Only a PAID order can be marked shipped. Stamps trackingNumber/fulfilledAt.',
+  })
+  @ApiParam({ name: 'id', description: 'Tag order ID' })
+  @ApiResponse({ status: 200, description: 'Tag order marked as shipped.' })
+  @ApiResponse({ status: 404, description: 'Tag order not found.' })
+  @ApiResponse({
+    status: 400,
+    description: 'The order is not in PAID status.',
+  })
+  @Patch('tag-orders/:id/ship')
+  markTagOrderShipped(
+    @CurrentUser() user: JwtPayload,
+
+    @Param('id', ParseMongoIdPipe)
+    id: string,
+
+    @Body()
+    dto: ShipTagOrderDto,
+  ) {
+    return this.adminService.markTagOrderShipped(user.sub, id, dto);
   }
 }

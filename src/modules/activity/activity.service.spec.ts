@@ -1,5 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getModelToken } from '@nestjs/mongoose';
+import { Types } from 'mongoose';
 
 import { ActivityService } from './activity.service';
 import { Activity } from './schemas/activity.schema';
@@ -11,6 +12,8 @@ describe('ActivityService', () => {
     find: jest.Mock;
     countDocuments: jest.Mock;
   };
+
+  const actorId = new Types.ObjectId().toString();
 
   beforeEach(async () => {
     activityModel = {
@@ -34,16 +37,18 @@ describe('ActivityService', () => {
   });
 
   describe('log', () => {
-    it('persists actor/action/target/metadata', async () => {
+    it('persists actor (cast to ObjectId) /action/target/metadata', async () => {
       activityModel.create.mockResolvedValue({});
 
-      await service.log('actor-1', 'admin.user.blocked', 'user-1', {
+      await service.log(actorId, 'admin.user.blocked', 'user-1', {
         reason: 'abuse',
       });
 
       expect(activityModel.create).toHaveBeenCalledWith({
-        actor: 'actor-1',
+        actor: new Types.ObjectId(actorId),
         action: 'admin.user.blocked',
+        // `target` is deliberately left as a plain string — a generic
+        // label (petId/tagId/reportId/...), not a single-collection ref.
         target: 'user-1',
         metadata: { reason: 'abuse' },
       });
@@ -52,7 +57,7 @@ describe('ActivityService', () => {
     it('defaults metadata to an empty object when omitted', async () => {
       activityModel.create.mockResolvedValue({});
 
-      await service.log('actor-1', 'tag.assigned', 'tag-1');
+      await service.log(actorId, 'tag.assigned', 'tag-1');
 
       expect(activityModel.create).toHaveBeenCalledWith(
         expect.objectContaining({ metadata: {} }),
@@ -61,7 +66,7 @@ describe('ActivityService', () => {
   });
 
   describe('findAll', () => {
-    it('paginates and filters by actor/action when provided', async () => {
+    it('paginates and filters by actor (cast to ObjectId) /action when provided', async () => {
       const limit = jest.fn().mockResolvedValue([]);
       const skip = jest.fn().mockReturnValue({ limit });
       const sort = jest.fn().mockReturnValue({ skip });
@@ -71,12 +76,12 @@ describe('ActivityService', () => {
       const result = await service.findAll({
         page: 2,
         limit: 5,
-        actor: 'actor-1',
+        actor: actorId,
         action: 'tag.suspended',
       });
 
       expect(activityModel.find).toHaveBeenCalledWith({
-        actor: 'actor-1',
+        actor: new Types.ObjectId(actorId),
         action: 'tag.suspended',
       });
       expect(skip).toHaveBeenCalledWith(5);

@@ -31,7 +31,9 @@ This file was referenced by name back when Phase 10 was scoped (see `PAWTATO_ROA
 | Admin | Dating Reports Queue | Planned — Phase 10 layout; **extended Phase 12** for chat-context reports |
 | Dating | Discover / Swipe | **Phase 13**: pool eligibility now includes a reset/reappearance rule — see Dating Pool Eligibility & Match Notifications section |
 | Dating | Matches List | **Phase 13**: new-match indicator now backed by the Notifications unread system — see same section |
+| Dating | Dating Hub / Matches List | **Phase 14**: unread chat-message badges (Dating tab, Match & Chats, per-conversation) now backed by a dedicated Dating Chat Notifications system — see Dating Chat Notifications section |
 | Other | Lost & Found, Auth, Pet CRUD, Admin dashboard | Not designed here — see note below (Pet Create/Edit gained a mandatory Gender field in Phase 12) |
+| Other | Pet Detail / Caretakers | **Phase 15**: shared pet access (caretakers) API now exists — no screens designed here yet, see Shared Pet Access section for the contract to build against |
 
 **Other modules note:** Lost & Found, auth/onboarding, pet profile CRUD, QR/tag management, and the general admin dashboard all have working, e2e-verified API flows (`PAWTATO_FRONTEND_FLOWS.md` Flows 1–2), but no page-layout plan exists yet — out of scope for this pass, which was requested specifically to cover the dating module rework. Add a section here when those get designed.
 
@@ -597,6 +599,86 @@ GET /notifications?type=dating.match-created&unreadOnly=true
 
 ---
 
+## Dating Chat Notifications (Match & Chats Unread) — Phase 14
+
+A **wholly separate, dedicated unread-message system** for Dating → Match & Chats — not the `dating.match-created` in-app `Notification` described in the section above, and not the general Notifications API at all. Read this section before wiring the Dating tab badge, the Match & Chats badge, or any unread indicator on a specific matched-pet row — none of it comes from `GET /notifications`.
+
+### Why a separate system
+
+The general Notification collection tracks discrete, one-shot events (`dating.match-created`, `pet.marked-lost`, …) that stay unread until explicitly acknowledged. Chat unread state behaves differently on purpose: it should disappear the instant the relevant conversation is opened, it needs to be grouped per-conversation (not per-message) for the Match & Chats list, and it must never share a query/index footprint with unrelated notification types. Rather than bolt those semantics onto the general system, dating chat unread state is tracked in its own backend collection (`DatingChatNotification`) with its own three endpoints below. **A message notification row is deleted outright when read — there is no `IsRead` flag anywhere in this system.** "Read" and "no longer exists" are the same thing.
+
+### Badge hierarchy
+
+```
+App Boot
+    ↓
+GET /dating/notifications/unread-summary
+    ↓
+Show "Dating 🔴 <totalUnread>"
+    ↓
+Open Dating
+    ↓
+Same response's matchChatsUnread → "Match & Chats 🔴 <matchChatsUnread>"
+    ↓
+Open Match & Chats
+    ↓
+GET /dating/notifications
+    ↓
+One row per matched pet/conversation with unread messages — highlight those rows
+    ↓
+Open a specific conversation (e.g. Bruno)
+    ↓
+POST /dating/matches/{matchId}/read
+    ↓
+Remove the local unread indicator for that conversation immediately;
+re-fetch the summary (or subtract locally) to update the Dating/Match & Chats badges
+```
+
+`totalUnread` and `matchChatsUnread` are currently always the same number — dating chat messages are the only thing this system tracks today — but are returned as two separate fields so the app shell (Dating tab badge) and the Dating hub (Match & Chats badge) can each read their own field without assuming they'll always match if this system ever grows a second notification kind.
+
+### Endpoints
+
+**`GET /dating/notifications/unread-summary`** — lightweight count only, safe to call on every app boot.
+```json
+{ "totalUnread": 5, "matchChatsUnread": 5 }
+```
+
+**`GET /dating/notifications`** — one entry per conversation that currently has at least one unread message, newest-first. Deliberately lightweight: no message content, no chat history — just enough to render the Match & Chats list's per-pet unread state.
+```json
+[
+  {
+    "matchId": "6710...",
+    "senderPetId": "66f0...",
+    "senderPetName": "Bruno",
+    "senderPetProfileImage": "https://.../bruno.jpg",
+    "recipientPetId": "66f1...",
+    "unreadCount": 2,
+    "lastMessageAt": "2026-08-29T10:04:00.000Z"
+  }
+]
+```
+`matchId` doubles as the conversation id — this backend has no separate Conversation entity, a Match *is* the conversation (same id `GET/POST /dating/matches/{matchId}/messages` already use). `senderPetId`/`recipientPetId` identify the *exact* pet pair, which matters the moment an owner has more than one pet in more than one match at once — never assume "the other owner's pet" without reading these two fields, since the same two owners could have multiple matches across different pet pairs simultaneously.
+
+**`POST /dating/matches/{matchId}/read`** — call this the moment a specific conversation is opened (same trigger point as fetching `GET /dating/matches/{matchId}/messages`). Deletes every currently-unread notification row for that conversation, for the calling user only.
+```json
+{ "message": "Conversation marked as read", "deletedCount": 2 }
+```
+Idempotent — calling it again on an already-clear conversation returns `deletedCount: 0`, not an error. `404` means the match doesn't exist or the caller owns neither side — the same IDOR-safe convention as every other `matches/{matchId}/...` route in this API.
+
+### What triggers a notification
+
+Every dating chat message — whether sent over `POST /dating/matches/{matchId}/messages` or the Socket.IO `sendMessage` event (see Real-Time Chat below; both paths converge on the same backend call) — creates exactly one `DatingChatNotification` for the recipient once the message itself has actually persisted. A failed send never produces a stray notification, and the same message can never double-notify the same recipient (enforced by a database-level unique constraint, not just application logic) — so a retried request is always safe to make again.
+
+### Security & scope
+
+Every one of these three endpoints derives the caller from the JWT, exactly like the rest of this API — there is no `userId`/`recipientUserId` parameter anywhere in these requests, and none would be honored if sent. A user can only ever see or clear their own unread dating-chat state.
+
+### Read/delete race safety
+
+If a new message arrives in the same conversation *while* `POST /dating/matches/{matchId}/read` is in flight, the backend guarantees the new message's notification survives — only the notifications that existed at the moment the read call started are deleted. There's nothing the frontend needs to do to benefit from this beyond the normal flow above (fetch messages, then mark read) — just don't assume a `0` unread count immediately after a read call means no message could possibly have arrived in the interim; if one did, it'll simply still show up in the next `GET /dating/notifications` poll or live `newMessage` socket event, with its own still-unread notification intact.
+
+---
+
 ## Real-Time Chat (Socket.IO) Integration — Phase 12
 
 This is the contract the Chat Thread, Matches List, and Match Celebration screens above all build on. Read this section fully before wiring any of them — it's written once here rather than repeated across each screen's notes.
@@ -658,8 +740,162 @@ The default Socket.IO adapter only broadcasts within a single server process. If
 
 ---
 
+## Shared Pet Access (Caretakers) — Phase 15
+
+New, non-dating feature (Post-MVP Backlog item: "Multiple authorized caretakers / shared pet access"): an owner can grant another registered user shared access to a pet — the flagship scenario is a vet, family member, or pet-sitter who needs to view/caretake a pet without owning it. **No screens are designed for this in this file yet** (out of this file's dating-focused scope, same as the rest of Pet CRUD) — this section documents the API contract so a Pet Detail screen redesign can build the caretaker UI against it later.
+
+### The access model, in one sentence
+
+A caretaker can **view** the pet and its medical/vaccination/scan/found-report history, and can **report it lost/found** — nothing more. Editing the pet's core profile (name/species/photo), deleting it, managing tags, managing the dating module, and managing *other* caretakers all remain strictly owner-only. There is no role tier (no "viewer" vs "editor") — one flat access level covers every real caretaking scenario this was scoped for.
+
+### Granting access — direct-add, not an invite flow
+
+```
+POST /pets/{petId}/caretakers
+{ "email": "caretaker@example.com" }
+```
+Owner-only. The target **must already have a Pawtato account** — there's no email-invite subsystem here, access is granted immediately once the owner supplies an existing account's email. `400` if that email is already a caretaker on this pet or is the owner's own email; `404` if no account exists with that email. Returns the created caretaker record with `userId` populated (`fullName`, `email`).
+
+### Discovering and viewing access
+
+```
+GET /pets/{petId}/caretakers      -- who has access to this pet (owner or an existing caretaker can see this list)
+GET /caretaking/pets              -- every pet the caller has been granted access to (not pets they own)
+```
+`GET /caretaking/pets` is the one a caretaker-facing UI needs on load — without it, a caretaker has no way to discover which pets they can act on at all, since the ordinary `GET /pets` only ever lists the caller's own pets. Each row carries the pet's basic info (`name`, `species`, `breed`, `profileImage`) and its owner's `fullName`/`email`, so a caretaker-facing list can render "Milo — owned by Jane Doe" without a second round-trip.
+
+### Revoking access — both directions work independently
+
+```
+DELETE /pets/{petId}/caretakers/{caretakerId}   -- owner removes a specific caretaker
+DELETE /pets/{petId}/caretakers/me              -- a caretaker voluntarily leaves, self-service
+```
+Both are idempotent-safe in the sense that a second call on an already-gone grant returns a clean `404`, never a crash. There's no confirmation-required flow baked into the API — if the frontend wants a "are you sure?" dialog before either call, that's a client-side concern.
+
+### What a caretaker can actually do, once added
+
+The exact same existing endpoints a pet's owner already uses — no new caretaker-specific action routes exist beyond the three above, since "caretaking" just widens who's allowed to call these:
+
+```
+GET    /pets/{petId}                     -- view
+PATCH  /pets/{petId}/report-lost         -- report lost (see the note below on who gets notified)
+PATCH  /pets/{petId}/report-found        -- report found
+GET    /pets/{petId}/medical-records     -- view
+POST   /pets/{petId}/medical-records     -- add a record
+GET    /pets/{petId}/vaccinations        -- view
+POST   /pets/{petId}/vaccinations        -- add a record
+GET    /pets/{petId}/scans               -- view scan history
+GET    /pets/{petId}/found-reports       -- view found-report history
+```
+Every other pet-scoped route (`PATCH /pets/{petId}` profile edits, the photo endpoints, `DELETE /pets/{petId}`, tags, dating) stays owner-only — a caretaker calling any of those gets the same `404` as a stranger, the same IDOR-safe convention used everywhere else in this API (never a distinguishing `403` that would confirm the pet exists).
+
+**Important for the notification/badge UI:** when a caretaker reports a pet lost or found, the resulting `pet.marked-lost`/`pet.marked-found` in-app notification and email always go to the pet's *real owner*, never the acting caretaker — a caretaker reporting an escape shouldn't result in the owner being left in the dark because the notification went to the wrong inbox. The audit trail (admin-visible only) does record which specific user actually performed the action.
+
+### Errors a caretaker-aware UI should handle
+
+| Status | When | UI implication |
+|---|---|---|
+| `404` on `GET /pets/{petId}` | The pet doesn't exist, or the caller has neither ownership nor caretaker access | Treat identically to "pet not found" — don't try to distinguish the two cases in copy, the API deliberately doesn't either |
+| `400` on `POST .../caretakers` | Duplicate caretaker, or adding yourself | Surface the API's own message directly — both are self-explanatory |
+| `404` on `POST .../caretakers` | Caller isn't the owner, or the target email has no account | Same shape as above — don't leak which reason it was beyond the message text |
+
+---
+
+## Expanded Medical Records — Document Attachments (Phase 16)
+
+New (Post-MVP Backlog: "Expanded medical records beyond the current medical/vaccinations modules — documents, certificates"): both a pet's medical records and its vaccination records can now carry uploaded file attachments — a scanned certificate, a lab result PDF, a vet's letter. No screens designed here yet (same out-of-scope note as Phase 15) — this documents the contract.
+
+### Uploading a document
+
+```
+POST /pets/{petId}/medical-records/{recordId}/documents
+POST /pets/{petId}/vaccinations/{vaccinationId}/documents
+```
+Both are `multipart/form-data`, field name `file`. Accepts JPEG/PNG/WebP or PDF, up to 10MB (`400` otherwise). Callable by the pet's owner or an authorized caretaker (Phase 15's `findAccessiblePet` access model — see that section). Returns the full updated record, `documents` array included.
+
+### Removing a document
+
+```
+DELETE /pets/{petId}/medical-records/{recordId}/documents/{documentId}
+DELETE /pets/{petId}/vaccinations/{vaccinationId}/documents/{documentId}
+```
+Same access model. Returns the updated record with that entry gone from `documents`. Idempotent-safe: removing an already-removed document returns `404`, not a crash.
+
+### The `documents` shape
+
+Each entry: `{ _id, url, fileName, mimeType, uploadedAt }`. `url` is a normal public URL (same convention as a pet's `profileImage`) — no signed-URL/audit-log machinery here, unlike dating's NID exchange; these documents aren't treated as identity-sensitive. There's no separate "list documents" endpoint — they're always embedded in the record itself, so `GET /pets/{petId}/medical-records` / `GET /pets/{petId}/vaccinations` already return everything needed to render a document list per record.
+
+### What this does *not* add
+
+No standalone "documents" resource independent of a medical/vaccination record, and no way to edit a document's metadata after upload (remove and re-upload instead) — kept deliberately minimal per the backlog's own scope.
+
+---
+
+## Push & SMS Notification Channels (Phase 17)
+
+New (Post-MVP Backlog: "Push notifications, SMS channel implementations"). No screens designed here — this is background plumbing a client wires into at app-init, not a page.
+
+**Registering a device for push** (call once per install, and again whenever the OS hands the app a new token):
+```
+POST /notifications/device-tokens
+{ "token": "<fcm-or-apns-token>", "platform": "IOS" | "ANDROID" | "WEB" }
+
+DELETE /notifications/device-tokens/{token}   -- on logout / uninstall, if reachable
+```
+Re-registering an already-known token (e.g. after a re-login) just updates its owner — safe to call unconditionally on every app start, no need to check "have I already registered this" client-side first.
+
+**Important caveat for whoever wires up real push/SMS UI copy later:** as of this phase, push and SMS are both **stub implementations** — the backend logs what it would send instead of actually calling FCM/APNs/Twilio (no provider account exists yet). Device-token registration is fully real and safe to build against now; just don't expect an actual push notification or SMS to arrive on a device until a future phase wires in real credentials. In-app notifications (`GET /notifications`, unchanged from Phase 4) are unaffected and keep working exactly as before.
+
+---
+
+## Nearby Lost-Pet Discovery (Phase 18)
+
+New (Post-MVP Backlog, split from "Nearby lost-pet discovery / community features" — only the geo-search half is built; a shelter/vet/business directory remains unscoped backlog). No screen designed here yet — this documents the contract for a future "pets lost near me" map/list view.
+
+```
+GET /public/lost-pets/nearby?lat={lat}&lng={lng}&radiusKm={radiusKm}
+```
+No authentication required, same public throttle tier as `GET /public/lost-pets`. `radiusKm` is optional (default 10, max 100). Returns the same public-safe fields as `GET /public/lost-pets` (`publicCode`, `name`, `species`, `breed`, `profileImage`, `lastSeenLocation`, `reward`, `lostDate`) plus a computed `distanceKm`, nearest first.
+
+**Important caveat:** only pets whose owner supplied coordinates when reporting lost (`ReportLostDto`'s optional `lat`/`lng`) are returned here — a pet reported lost with only a text location still appears in the plain `GET /public/lost-pets` listing, just not in this geo search. A "report lost" form that wants to make a pet discoverable this way needs to actually capture/send coordinates (e.g. via the browser/device's geolocation API), not just a typed address string.
+
+---
+
+## QR Tag Ordering/Commerce (Phase 19)
+
+New (Post-MVP Backlog: "QR tag ordering/commerce flow"), using Stripe Checkout. No screens designed here yet — this documents the contract for a future "order tags" flow in account settings.
+
+**Starting an order:**
+```
+POST /tag-orders
+{
+  "quantity": 5,
+  "shippingAddress": {
+    "fullName": "...", "line1": "...", "line2": "...",
+    "city": "...", "state": "...", "postalCode": "...", "country": "..."
+  }
+}
+→ { "orderId": "...", "checkoutUrl": "https://checkout.stripe.com/..." }
+```
+Redirect the browser to `checkoutUrl` — this is a real Stripe-hosted checkout page, not something to build a custom payment form against. The order is created `PENDING_PAYMENT` immediately; it only becomes `PAID` once Stripe confirms payment via a server-side webhook (asynchronous — don't assume payment succeeded just because the redirect to Stripe happened). Pricing is currently a single flat per-tag rate (`TAG_UNIT_PRICE_CENTS`, server-configured) — there's no per-item product catalog to render.
+
+**Checking order status:**
+```
+GET /tag-orders/mine          -- the caller's own orders
+GET /tag-orders/{id}          -- one order (owner or admin)
+```
+`status` is one of `PENDING_PAYMENT | PAID | FULFILLED | CANCELLED`. Poll `GET /tag-orders/{id}` (or `mine`) after redirecting back from Stripe's success URL to find out whether the webhook has landed yet — there's no push/websocket signal for this, same pattern as everywhere else "wait for a domain event to land" already works in this API.
+
+**Once paid**, the ordered tags exist as real inventory (`MANUFACTURED` status, same lifecycle as everything under the existing Tags feature) that an admin ships and marks fulfilled from the admin side — no separate "my ordered tags" listing exists yet; they surface through the same tag inventory a claimed/assigned tag would.
+
+---
+
 ## Changelog
 
 - **2026-08-25** — File created (Phase 11). Full page-by-page layout plan for every Dating module screen, including the two new identity-verification screens (owner-facing submit/status) and the new admin verification queue. Other modules (Lost & Found, auth, pet CRUD, general admin dashboard) intentionally left undesigned here — out of scope for this pass.
 - **2026-08-25** — Extensive update for Phase 12 (Dating Hardening), driven by a full end-to-end audit of the dating module against this file and the API. Changes: (1) flagged a cross-cutting requirement for whoever builds the not-yet-designed Pet Create/Edit screen — `gender` is now mandatory on every pet, platform-wide, because Breeding-mode matching is strictly opposite-gender and needs it; (2) Discover screen notes updated to explain the opposite-gender guarantee is enforced server-side, not something the client filters; (3) Matches List updated for the new archived-row state (a match no longer vanishes on unmatch — it stays visible, read-only, until explicitly deleted); (4) Chat Thread substantially reworked: a header overflow menu (Unmatch / Report this chat / Delete conversation), an archived read-only state, and the whole screen now built on a real-time Socket.IO layer instead of REST-only; (5) Matched Profile Detail's existing Unmatch/Report actions annotated as the same calls the Chat Thread's overflow menu makes, with the profile-vs-chat report distinction (matchId attached or not) called out explicitly; (6) Report Profile modal extended with a second "Report this chat" entry point that pre-attaches match context, with a visible "our team can see this conversation" disclosure line mirroring the existing NID-view transparency copy; (7) admin Dating Reports Queue extended with an on-demand, audit-logged "View conversation" action for reports filed with chat context, mirroring the Verification Queue's on-demand NID-image pattern exactly; (8) added a new, extensive "Real-Time Chat (Socket.IO) Integration" section — the full connection/auth/event/reconnection contract every chat-related screen above builds on, written once rather than repeated per screen.
 - **2026-08-25** — Phase 13 (Dating Pool Reset + Match Notifications). `GET /dating/discover` no longer excludes a skipped/liked pet forever — it now reappears after a configurable reset window (`DATING_POOL_RESET_DAYS`, default 3 days) unless it's in an `ACTIVE` match, which is excluded unconditionally and is the one thing the reset window never overrides; unmatching lifts that permanent exclusion and falls back to the same reset-window rule rather than resetting the clock. `POST /dating/swipe` now accepts a re-swipe on a reappeared pet instead of rejecting it as a duplicate. A new match now also creates a persisted, unread `Notification` (`dating.match-created`) for each side in the existing Notifications system, structurally deduped (fires only on the request that actually inserted the Match, never on a race-loser or retry) rather than deduped after the fact. `NotificationQueryDto` gained an optional `type` filter so the Matches-tab "new match" badge can be read straight from `GET /notifications?type=dating.match-created&unreadOnly=true`'s `pagination.total` — no new endpoint, no parallel unread mechanism. Unmatch itself was already implemented pre-Phase-13 (`POST /dating/matches/{id}/unmatch`, documented in the Phase 12 update above) and is unchanged by this pass except for the pool-eligibility interaction just described. Full details in the new "Dating Pool Eligibility & Match Notifications" section above the Real-Time Chat section.
+- **2026-08-29** — Phase 14 (Dating Chat Notifications). Added a wholly separate, dedicated unread-message system for Dating → Match & Chats — explicitly *not* the `dating.match-created` in-app `Notification` from Phase 13 above, and not the general Notifications API at all. Three new endpoints: `GET /dating/notifications/unread-summary` (lightweight `{ totalUnread, matchChatsUnread }` count for the Dating tab and Match & Chats badges), `GET /dating/notifications` (one row per conversation with unread messages — `matchId`, `senderPetId`/`senderPetName`/`senderPetProfileImage`, `recipientPetId`, `unreadCount`, `lastMessageAt`; no message content or chat history), and `POST /dating/matches/{matchId}/read` (deletes every currently-unread notification for that conversation for the caller — idempotent, IDOR-safe same as every other `matches/{matchId}/...` route). A notification is created once per message per recipient (deduped at the database level, so a retried send is always safe), correctly attributed to the exact sender/recipient pet pair (not just the two owners) since a single match is always between exactly two specific pets even when an owner has several. Read state is a hard delete, never an `IsRead` flag — "read" and "no longer exists" are the same thing here — and the delete is race-safe against a message arriving mid-read (only notifications that existed when the read call started are removed). Full contract in the new "Dating Chat Notifications (Match & Chats Unread) — Phase 14" section above the Real-Time Chat section.
+- **2026-08-29** — Phase 15 (Shared Pet Access / Caretakers), first non-dating feature documented in this file. An owner can grant another registered user ("caretaker") shared access to a pet via `POST /pets/{petId}/caretakers` (direct-add by email, no invite flow — the account must already exist), listable via `GET /pets/{petId}/caretakers` and, from the caretaker's own side, `GET /caretaking/pets` (since the ordinary `GET /pets` only ever lists owned pets). Revocable both ways: `DELETE /pets/{petId}/caretakers/{caretakerId}` (owner) or `DELETE /pets/{petId}/caretakers/me` (caretaker self-service). Access is a single flat level, no role tiers: a caretaker can view the pet and its medical/vaccination/scan/found-report history and report it lost/found, using the exact same existing endpoints an owner already calls — no new caretaker-specific action routes beyond the three above. Every identity-changing action (profile edits, photo, delete, tags, dating) stays strictly owner-only, same IDOR-safe `404` convention as the rest of this API. When a caretaker reports a pet lost/found, the notification/email still goes to the real owner, never the acting caretaker — only the (admin-visible) audit trail records who actually did it. No screens designed here yet (out of this file's dating-focused scope, same as the rest of Pet CRUD) — full API contract in the new "Shared Pet Access (Caretakers) — Phase 15" section above the Changelog.
+- **2026-08-29** — Phase 16 (Expanded Medical Records — Document Attachments), catch-up entry (the section itself already existed but this changelog line was missed at the time). Medical records and vaccination records can each carry uploaded file attachments — `POST`/`DELETE .../medical-records/{recordId}/documents(/{documentId})` and the identical pair under `.../vaccinations/{vaccinationId}/documents`, multipart, image or PDF up to 10MB, same Phase 15 owner-or-caretaker access model. No signed-URL/audit machinery like dating's NID exchange — these aren't treated as identity-sensitive, just a normal public `url` per document embedded directly in the parent record's response. Full contract in "Expanded Medical Records — Document Attachments (Phase 16)" above.
+- **2026-08-29** — Phases 17 (Push & SMS Notification Channels), 18 (Nearby Lost-Pet Discovery), and 19 (QR Tag Ordering/Commerce), the last three scoped Phase 9 backlog items. Phase 17: `POST`/`DELETE /notifications/device-tokens` for push registration — real device-token storage today, but push/SMS *sending* is currently a stub (logs instead of calling FCM/APNs/Twilio), so don't expect an actual notification to arrive on a device yet. Phase 18: `GET /public/lost-pets/nearby?lat=&lng=&radiusKm=`, geo search over only the lost pets whose owner supplied coordinates on report-lost — a pet reported lost with just a text location won't appear here even though it still appears in the plain lost-pets listing. Phase 19: `POST /tag-orders` starts a real Stripe Checkout session (redirect the browser to the returned `checkoutUrl`); the order stays `PENDING_PAYMENT` until Stripe's webhook confirms payment asynchronously — poll `GET /tag-orders/{id}` after the redirect back rather than assuming success. No screens designed for any of the three yet — all three sections above document contract only. Full detail in the new "Push & SMS Notification Channels (Phase 17)", "Nearby Lost-Pet Discovery (Phase 18)", and "QR Tag Ordering/Commerce (Phase 19)" sections above.

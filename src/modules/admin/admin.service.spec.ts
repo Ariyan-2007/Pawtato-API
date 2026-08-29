@@ -11,7 +11,10 @@ import { FoundReportsService } from '../found-reports/found-reports.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { DatingService } from '../dating/dating.service';
 import { IdentityVerificationService } from '../dating/identity-verification.service';
+import { CaretakersService } from '../caretakers/caretakers.service';
+import { TagOrdersService } from '../tag-orders/tag-orders.service';
 import { ActivityService } from '../activity/activity.service';
+import { TagOrderStatus } from '../../common/enums/tag-order-status.enum';
 import { UserRole } from '../../common/enums/user-role.enum';
 import { FoundReportStatus } from '../../common/enums/found-report-status.enum';
 import { DatingReportStatus } from '../../common/enums/dating-report-status.enum';
@@ -65,6 +68,11 @@ describe('AdminService', () => {
     adminReject: jest.Mock;
     deleteForUser: jest.Mock;
   };
+  let caretakersService: {
+    deleteAllForPets: jest.Mock;
+    deleteAllForCaretakerUser: jest.Mock;
+  };
+  let tagOrdersService: { adminList: jest.Mock; adminMarkShipped: jest.Mock };
   let activityService: { log: jest.Mock };
 
   const actorId = 'admin-1';
@@ -136,6 +144,18 @@ describe('AdminService', () => {
         .mockResolvedValue({ status: IdentityVerificationStatus.REJECTED }),
       deleteForUser: jest.fn().mockResolvedValue({ deletedCount: 0 }),
     };
+    caretakersService = {
+      deleteAllForPets: jest.fn().mockResolvedValue({ deletedCount: 0 }),
+      deleteAllForCaretakerUser: jest
+        .fn()
+        .mockResolvedValue({ deletedCount: 0 }),
+    };
+    tagOrdersService = {
+      adminList: jest.fn().mockResolvedValue({ orders: [] }),
+      adminMarkShipped: jest
+        .fn()
+        .mockResolvedValue({ status: TagOrderStatus.FULFILLED }),
+    };
     activityService = { log: jest.fn().mockResolvedValue(undefined) };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -154,6 +174,8 @@ describe('AdminService', () => {
           provide: IdentityVerificationService,
           useValue: identityVerificationService,
         },
+        { provide: CaretakersService, useValue: caretakersService },
+        { provide: TagOrdersService, useValue: tagOrdersService },
         { provide: ActivityService, useValue: activityService },
       ],
     }).compile();
@@ -256,6 +278,10 @@ describe('AdminService', () => {
       expect(identityVerificationService.deleteForUser).toHaveBeenCalledWith(
         'user-1',
       );
+      expect(caretakersService.deleteAllForPets).toHaveBeenCalledWith(petIds);
+      expect(caretakersService.deleteAllForCaretakerUser).toHaveBeenCalledWith(
+        'user-1',
+      );
       expect(tagsService.deleteAllForOwner).toHaveBeenCalledWith('user-1');
       expect(petsService.deleteAllForOwner).toHaveBeenCalledWith('user-1');
       expect(notificationsService.deleteAllForUser).toHaveBeenCalledWith(
@@ -327,6 +353,9 @@ describe('AdminService', () => {
         'pet-1',
       ]);
       expect(datingService.deleteAllForPets).toHaveBeenCalledWith(['pet-1']);
+      expect(caretakersService.deleteAllForPets).toHaveBeenCalledWith([
+        'pet-1',
+      ]);
       expect(tagsService.deleteAllForPet).toHaveBeenCalledWith('pet-1');
       expect(petsService.deletePet).toHaveBeenCalledWith('pet-1');
       expect(activityService.log).toHaveBeenCalledWith(
@@ -428,6 +457,28 @@ describe('AdminService', () => {
         actorId,
         'v1',
         'blurry',
+      );
+    });
+  });
+
+  describe('tag order delegation', () => {
+    it('tagOrders delegates to TagOrdersService.adminList', async () => {
+      const query = { page: 1, limit: 10 };
+
+      await service.tagOrders(query);
+
+      expect(tagOrdersService.adminList).toHaveBeenCalledWith(query);
+    });
+
+    it('markTagOrderShipped delegates to TagOrdersService.adminMarkShipped', async () => {
+      const dto = { trackingNumber: 'TRACK1' };
+
+      await service.markTagOrderShipped(actorId, 'order-1', dto);
+
+      expect(tagOrdersService.adminMarkShipped).toHaveBeenCalledWith(
+        actorId,
+        'order-1',
+        dto,
       );
     });
   });

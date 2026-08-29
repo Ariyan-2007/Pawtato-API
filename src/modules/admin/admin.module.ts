@@ -13,6 +13,8 @@ import { FoundReportsModule } from '../found-reports/found-reports.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { ActivityModule } from '../activity/activity.module';
 import { DatingModule } from '../dating/dating.module';
+import { CaretakersModule } from '../caretakers/caretakers.module';
+import { TagOrdersModule } from '../tag-orders/tag-orders.module';
 
 @Module({
   imports: [
@@ -26,6 +28,8 @@ import { DatingModule } from '../dating/dating.module';
     NotificationsModule,
     ActivityModule,
     DatingModule,
+    CaretakersModule,
+    TagOrdersModule,
   ],
   controllers: [AdminController],
   providers: [AdminService],

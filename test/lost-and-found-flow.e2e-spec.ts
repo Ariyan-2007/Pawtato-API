@@ -215,6 +215,36 @@ describe('Lost & found flow (e2e)', () => {
     expect(found).toBeDefined();
   });
 
+  // Regression coverage for a real bug found while building Phase 16: these
+  // two owner-facing history endpoints query by `pet` with the caller's
+  // petId, and (until fixed) the underlying records were stored with `pet`
+  // as a differently-typed value than the query used, so results always
+  // came back empty despite the finder's scan/report genuinely existing —
+  // no prior e2e spec ever asserted on these two routes' actual content.
+  it("the owner's scan history includes the finder's anonymous scan", async () => {
+    const res = await request(app.getHttpServer())
+      .get(`/api/pets/${petId}/scans`)
+      .set('Authorization', `Bearer ${accessToken}`)
+      .expect(200);
+
+    const scans = data<Array<{ _id: string }>>(res);
+    expect(scans.length).toBeGreaterThan(0);
+  });
+
+  it("the owner's found-report history includes the finder's report", async () => {
+    const res = await request(app.getHttpServer())
+      .get(`/api/pets/${petId}/found-reports`)
+      .set('Authorization', `Bearer ${accessToken}`)
+      .expect(200);
+
+    const reports = data<Array<{ message: string }>>(res);
+    expect(
+      reports.some((r) =>
+        r.message.includes('Found near Road 27, looks healthy'),
+      ),
+    ).toBe(true);
+  });
+
   it('owner marks the pet found, clearing lost status', async () => {
     const res = await request(app.getHttpServer())
       .patch(`/api/pets/${petId}/report-found`)

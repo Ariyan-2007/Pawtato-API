@@ -78,12 +78,17 @@ export class PetsController {
     return this.petsService.getStatistics(user.sub);
   }
 
-  @ApiOperation({ summary: 'Get a single pet owned by the current user' })
+  @ApiOperation({
+    summary: 'Get a single pet the current user owns or is a caretaker for',
+    description:
+      "Accessible to the pet's owner and to any authorized caretaker (see " +
+      'POST /pets/:petId/caretakers), not just the owner.',
+  })
   @ApiParam({ name: 'id', description: 'Pet ID' })
   @ApiResponse({ status: 200, description: 'The pet.' })
   @ApiResponse({
     status: 404,
-    description: 'Pet not found or not owned by the caller.',
+    description: 'Pet not found, or the caller has no access to it.',
   })
   @Get(':id')
   findOne(
@@ -201,12 +206,17 @@ export class PetsController {
     return this.petsService.remove(user.sub, petId);
   }
 
-  @ApiOperation({ summary: 'Mark a pet as lost' })
+  @ApiOperation({
+    summary: 'Mark a pet as lost',
+    description:
+      'Callable by the owner or an authorized caretaker (e.g. a pet-sitter reporting an ' +
+      'escape). The owner is always the one notified, regardless of who reports it.',
+  })
   @ApiParam({ name: 'id', description: 'Pet ID' })
   @ApiResponse({ status: 200, description: 'Pet marked as lost.' })
   @ApiResponse({
     status: 404,
-    description: 'Pet not found or not owned by the caller.',
+    description: 'Pet not found, or the caller has no access to it.',
   })
   @Patch(':id/report-lost')
   reportLost(
@@ -221,12 +231,15 @@ export class PetsController {
     return this.petsService.reportLost(user.sub, petId, dto);
   }
 
-  @ApiOperation({ summary: 'Mark a pet as found/recovered' })
+  @ApiOperation({
+    summary: 'Mark a pet as found/recovered',
+    description: 'Callable by the owner or an authorized caretaker.',
+  })
   @ApiParam({ name: 'id', description: 'Pet ID' })
   @ApiResponse({ status: 200, description: 'Pet marked as found.' })
   @ApiResponse({
     status: 404,
-    description: 'Pet not found or not owned by the caller.',
+    description: 'Pet not found, or the caller has no access to it.',
   })
   @Patch(':id/report-found')
   reportFound(

@@ -116,24 +116,42 @@ export class TagsService {
     });
   }
 
-  // Admin-only: manufactures a batch of unowned tags up front (a real print
-  // run), each starting in MANUFACTURED — no owner until a user claims one
-  // via its printed code (see claim() below). Sequential by design: this is
-  // a bounded (<=500), infrequent admin operation, not a hot path, and each
-  // insert's own collision-retry already depends on observing prior inserts.
-  async bulkCreate(actorId: string, dto: BulkCreateTagsDto) {
-    const redirectBase = dto.redirectBaseUrl.replace(/\/+$/, '');
+  // Mints `count` unowned MANUFACTURED tags against a given redirect base —
+  // the shared mechanics behind both bulkCreate() (admin print runs) and
+  // TagOrdersService.handleCheckoutCompleted() (Phase 19 — a paid tag order
+  // becomes real inventory the same way a manual admin batch does, so a
+  // finished order shows up in the exact same GET /tags admin tooling).
+  // Sequential by design: bounded, infrequent, and each insert's own
+  // collision-retry already depends on observing prior inserts.
+  async mintManufacturedBatch(
+    count: number,
+    redirectBaseUrl: string,
+    batchLabel?: string,
+  ): Promise<TagDocument[]> {
+    const redirectBase = redirectBaseUrl.replace(/\/+$/, '');
 
     const tags: TagDocument[] = [];
 
-    for (let i = 0; i < dto.count; i++) {
+    for (let i = 0; i < count; i++) {
       const tag = await this.generateAndInsertTag(redirectBase, {
         status: TagStatus.MANUFACTURED,
-        batchLabel: dto.batchLabel,
+        batchLabel,
       });
 
       tags.push(tag);
     }
+
+    return tags;
+  }
+
+  // Admin-only: manufactures a batch of unowned tags up front (a real print
+  // run) — see mintManufacturedBatch() above for the shared mechanics.
+  async bulkCreate(actorId: string, dto: BulkCreateTagsDto) {
+    const tags = await this.mintManufacturedBatch(
+      dto.count,
+      dto.redirectBaseUrl,
+      dto.batchLabel,
+    );
 
     await this.activityService.log(actorId, 'tag.bulk-created', 'Tag', {
       count: tags.length,

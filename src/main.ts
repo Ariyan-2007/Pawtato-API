@@ -14,6 +14,11 @@ import { winstonLogger } from './config/logger.config';
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     logger: winstonLogger,
+    // Makes req.rawBody available on every request — only the Stripe webhook
+    // route (POST /tag-orders/webhook) needs it, to verify the signature
+    // against the exact bytes Stripe signed, but this option doesn't disable
+    // JSON body parsing for any other route.
+    rawBody: true,
   });
 
   const configService = app.get(ConfigService);
@@ -101,6 +106,10 @@ async function bootstrap() {
     .addTag(
       'Dating',
       'Pet dating profiles, swipe-to-match discovery, matches, lightweight in-app chat, and abuse reporting',
+    )
+    .addTag(
+      'Tag Orders',
+      'Order physical QR tags via Stripe Checkout; admin fulfillment/shipping',
     )
     .build();
 

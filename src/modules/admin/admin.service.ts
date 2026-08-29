@@ -10,6 +10,8 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { ActivityService } from '../activity/activity.service';
 import { DatingService } from '../dating/dating.service';
 import { IdentityVerificationService } from '../dating/identity-verification.service';
+import { CaretakersService } from '../caretakers/caretakers.service';
+import { TagOrdersService } from '../tag-orders/tag-orders.service';
 import { DashboardStatsDto } from './dto/dashboard-stats.dto';
 import { AdminUserQueryDto } from './dto/admin-user-query.dto';
 import { UserRole } from '../../common/enums/user-role.enum';
@@ -19,6 +21,8 @@ import { FoundReportStatus } from '../../common/enums/found-report-status.enum';
 import type { AdminDatingReportQueryDto } from './dto/admin-dating-report-query.dto';
 import { DatingReportStatus } from '../../common/enums/dating-report-status.enum';
 import type { AdminIdentityVerificationQueryDto } from './dto/admin-identity-verification-query.dto';
+import type { AdminTagOrderQueryDto } from '../tag-orders/dto/admin-tag-order-query.dto';
+import type { ShipTagOrderDto } from '../tag-orders/dto/ship-tag-order.dto';
 
 @Injectable()
 export class AdminService {
@@ -33,6 +37,8 @@ export class AdminService {
     private readonly notificationsService: NotificationsService,
     private readonly datingService: DatingService,
     private readonly identityVerificationService: IdentityVerificationService,
+    private readonly caretakersService: CaretakersService,
+    private readonly tagOrdersService: TagOrdersService,
     private readonly activityService: ActivityService,
   ) {}
 
@@ -90,12 +96,14 @@ export class AdminService {
   // every tag they own (assigned to one of those pets or not), and
   // everything that in turn references those pets/tags (medical records,
   // vaccinations, scan history, found reports, in-app notifications, dating
-  // profiles/swipes/matches/messages), plus every dating report this user
-  // filed against someone else's pet, plus their identity-verification
-  // record and its private NID files (Phase 11 — user-scoped, not
-  // pet-scoped, so this doesn't fall out of the petIds-based cascade
-  // above), plus every stored file along the way (avatar, pet photos, tag
-  // QR images, found-report photos). Deliberately
+  // profiles/swipes/matches/messages, caretaker grants on their own pets),
+  // plus every dating report this user filed against someone else's pet,
+  // plus their identity-verification record and its private NID files
+  // (Phase 11 — user-scoped, not pet-scoped, so this doesn't fall out of
+  // the petIds-based cascade above), plus their own caretaker access on
+  // *other* people's pets (Phase 15 — also user-scoped, same reasoning),
+  // plus every stored file along the way (avatar, pet photos, tag QR
+  // images, found-report photos). Deliberately
   // not wrapped in a Mongo transaction —
   // this project's MongoDB isn't running as a replica set (see
   // PAWTATO_ROADMAP.md's Phase 8 notes), which transactions require.
@@ -133,6 +141,13 @@ export class AdminService {
     await this.datingService.deleteReportsByReporter(id);
     await this.identityVerificationService.deleteForUser(id);
 
+    // Both directions: caretaker rows on this user's own pets (petIds-based,
+    // same as every other pet-keyed collection above) and rows where this
+    // user was themselves a caretaker on someone else's pet (userId-based —
+    // their access there must end when their account does).
+    await this.caretakersService.deleteAllForPets(petIds);
+    await this.caretakersService.deleteAllForCaretakerUser(id);
+
     await this.tagsService.deleteAllForOwner(id);
     await this.petsService.deleteAllForOwner(id);
 
@@ -166,7 +181,8 @@ export class AdminService {
 
   // Deletes a single pet and everything connected to it (its assigned tag +
   // QR image, medical records, vaccinations, scan history, found reports,
-  // dating profile/swipes/matches/messages/reports-against-it), without
+  // dating profile/swipes/matches/messages/reports-against-it, caretaker
+  // grants), without
   // touching the owner's other pets/tags. See delete() above for the
   // equivalent whole-user cascade.
   async deletePet(actorId: string, id: string) {
@@ -177,6 +193,7 @@ export class AdminService {
     await this.medicalService.deleteAllForPets([id]);
     await this.vaccinationsService.deleteAllForPets([id]);
     await this.datingService.deleteAllForPets([id]);
+    await this.caretakersService.deleteAllForPets([id]);
     await this.tagsService.deleteAllForPet(id);
 
     const result = await this.petsService.deletePet(id);
@@ -232,6 +249,14 @@ export class AdminService {
 
   async deactivateDatingProfile(actorId: string, petId: string) {
     return this.datingService.adminDeactivateProfile(actorId, petId);
+  }
+
+  async tagOrders(query: AdminTagOrderQueryDto) {
+    return this.tagOrdersService.adminList(query);
+  }
+
+  async markTagOrderShipped(actorId: string, id: string, dto: ShipTagOrderDto) {
+    return this.tagOrdersService.adminMarkShipped(actorId, id, dto);
   }
 
   async datingReportMessages(actorId: string, reportId: string) {
