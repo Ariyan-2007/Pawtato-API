@@ -3,6 +3,7 @@ import { OnEvent } from '@nestjs/event-emitter';
 
 import { DOMAIN_EVENTS } from '../../../common/events/domain-events';
 import type {
+  AdminBroadcastEvent,
   DatingMatchCreatedEvent,
   FoundReportCreatedEvent,
   PetMarkedFoundEvent,
@@ -147,6 +148,13 @@ export class DomainEventsListener {
       petId: event.petBId,
       petName: event.petBName,
       otherPetName: event.petAName,
+    });
+  }
+
+  @OnEvent(DOMAIN_EVENTS.ADMIN_BROADCAST)
+  async onAdminBroadcast(event: AdminBroadcastEvent) {
+    await this.handle(DOMAIN_EVENTS.ADMIN_BROADCAST, event.ownerId, {
+      ...event,
     });
   }
 }

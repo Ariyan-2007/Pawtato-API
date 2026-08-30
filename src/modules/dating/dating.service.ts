@@ -1178,4 +1178,48 @@ export class DatingService {
 
     return { deletedCount: result.deletedCount };
   }
+
+  // Feeds the admin dashboard/analytics — a handful of cheap counts plus one
+  // swipe-outcome aggregation, run in parallel rather than the caller
+  // sequencing several separate delegated calls itself.
+  async adminStats() {
+    const [
+      totalProfiles,
+      activeProfiles,
+      totalMatches,
+      activeMatches,
+      pendingReports,
+      swipeOutcomes,
+    ] = await Promise.all([
+      this.profileModel.countDocuments(),
+      this.profileModel.countDocuments({ isActive: true }),
+      this.matchModel.countDocuments(),
+      this.matchModel.countDocuments({ status: MatchStatus.ACTIVE }),
+      this.datingReportModel.countDocuments({
+        status: DatingReportStatus.PENDING,
+      }),
+      this.swipeModel.aggregate<{ _id: SwipeAction; count: number }>([
+        { $group: { _id: '$action', count: { $sum: 1 } } },
+      ]),
+    ]);
+
+    const totalLikes =
+      swipeOutcomes.find((row) => row._id === SwipeAction.LIKE)?.count ?? 0;
+    const totalSwipes = swipeOutcomes.reduce((sum, row) => sum + row.count, 0);
+
+    return {
+      totalProfiles,
+      activeProfiles,
+      totalMatches,
+      activeMatches,
+      pendingReports,
+      totalSwipes,
+      totalLikes,
+      // Of every LIKE, what fraction resulted in a match (a LIKE the other
+      // side already reciprocated) — a genuinely meaningful engagement
+      // signal, unlike a raw swipe count. 0 rather than NaN/Infinity when
+      // nobody has liked anything yet.
+      matchRate: totalLikes === 0 ? 0 : totalMatches / totalLikes,
+    };
+  }
 }

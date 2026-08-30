@@ -80,6 +80,12 @@ describe('NotificationsController', () => {
 
       expect(controller.getVapidPublicKey()).toEqual({ publicKey: null });
     });
+
+    it('also returns null for an empty string, not the empty string itself', () => {
+      configService.get.mockReturnValue('');
+
+      expect(controller.getVapidPublicKey()).toEqual({ publicKey: null });
+    });
   });
 
   describe('registerWebPushSubscription', () => {
@@ -99,10 +105,9 @@ describe('NotificationsController', () => {
 
   describe('unregisterWebPushSubscription', () => {
     it("delegates to the service with the caller's id and the endpoint", async () => {
-      await controller.unregisterWebPushSubscription(
-        user,
-        'https://push.example.com/abc',
-      );
+      await controller.unregisterWebPushSubscription(user, {
+        endpoint: 'https://push.example.com/abc',
+      });
 
       expect(
         notificationsService.unregisterWebPushSubscription,

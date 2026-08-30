@@ -171,4 +171,9 @@ export class CaretakersService {
   async handlePetDeleted(payload: { petId: string; ownerId: string }) {
     await this.deleteAllForPets([payload.petId]);
   }
+
+  // Feeds the admin dashboard's platform-usage widget.
+  async countAll(): Promise<number> {
+    return this.caretakerModel.countDocuments();
+  }
 }

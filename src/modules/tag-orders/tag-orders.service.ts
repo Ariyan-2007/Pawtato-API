@@ -181,4 +181,110 @@ export class TagOrdersService {
 
     return order;
   }
+
+  // Customer-service cancellation. A still-unpaid order is just marked
+  // CANCELLED outright — nothing was ever charged. A PAID-but-not-yet-shipped
+  // order is refunded in full through Stripe first (this feature has no
+  // partial-fulfillment/partial-refund concept — see StripeService.refundPayment)
+  // and only marked CANCELLED once that succeeds, so a failed refund never
+  // leaves the order silently cancelled while the customer's money is still
+  // gone. A FULFILLED order can no longer be cancelled here — tags have
+  // already shipped, so undoing that is a manual, non-API process.
+  async adminCancel(actorId: string, id: string) {
+    const order = await this.tagOrderModel.findById(id);
+
+    if (!order) {
+      throw new NotFoundException('Tag order not found');
+    }
+
+    if (
+      order.status === TagOrderStatus.FULFILLED ||
+      order.status === TagOrderStatus.CANCELLED
+    ) {
+      throw new BadRequestException(
+        `An order that is already ${order.status.toLowerCase()} cannot be cancelled here.`,
+      );
+    }
+
+    const wasPaid = order.status === TagOrderStatus.PAID;
+
+    if (wasPaid) {
+      if (!order.stripePaymentIntentId) {
+        throw new BadRequestException(
+          'This order is marked PAID but has no recorded payment to refund — investigate before cancelling.',
+        );
+      }
+
+      await this.stripeService.refundPayment(order.stripePaymentIntentId);
+    }
+
+    order.status = TagOrderStatus.CANCELLED;
+
+    await order.save();
+
+    await this.activityService.log(
+      actorId,
+      'tag-order.cancelled',
+      order._id.toString(),
+      { refunded: wasPaid },
+    );
+
+    return order;
+  }
+
+  // Feeds the admin dashboard's commerce widget.
+  async adminRevenueSummary() {
+    const [statusCounts, revenue] = await Promise.all([
+      this.tagOrderModel.aggregate<{ _id: TagOrderStatus; count: number }>([
+        { $group: { _id: '$status', count: { $sum: 1 } } },
+      ]),
+      // Revenue is recognized on PAID (money actually collected), regardless
+      // of whether fulfillment has happened yet — a CANCELLED-after-refund
+      // order is excluded since the money was given back.
+      this.tagOrderModel.aggregate<{ _id: null; totalCents: number }>([
+        {
+          $match: {
+            status: { $in: [TagOrderStatus.PAID, TagOrderStatus.FULFILLED] },
+          },
+        },
+        { $group: { _id: null, totalCents: { $sum: '$totalAmountCents' } } },
+      ]),
+    ]);
+
+    const countByStatus = Object.fromEntries(
+      Object.values(TagOrderStatus).map((status) => [status, 0]),
+    ) as Record<TagOrderStatus, number>;
+
+    for (const row of statusCounts) {
+      countByStatus[row._id] = row.count;
+    }
+
+    return {
+      countByStatus,
+      totalRevenueCents: revenue[0]?.totalCents ?? 0,
+      currency: this.configService.get<string>('stripe.currency', 'usd'),
+    };
+  }
+
+  // Same shape/pattern as PetsService.monthlyRegistrations() — a 12-slot
+  // array indexed by calendar month, this year only.
+  async monthlyRevenue(): Promise<number[]> {
+    const months: number[] = new Array<number>(12).fill(0);
+
+    const orders = (await this.tagOrderModel
+      .find({
+        status: { $in: [TagOrderStatus.PAID, TagOrderStatus.FULFILLED] },
+      })
+      .select('totalAmountCents paidAt')
+      .lean()
+      .exec()) as Array<{ totalAmountCents: number; paidAt?: Date }>;
+
+    orders.forEach((order) => {
+      if (order.paidAt) {
+        months[new Date(order.paidAt).getMonth()] += order.totalAmountCents;
+      }
+    });
+
+    return months;
+  }
 }

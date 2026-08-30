@@ -7,7 +7,6 @@ import { QueryFilter, Model } from 'mongoose';
 import * as bcrypt from 'bcrypt';
 
 import { User, UserDocument } from './schemas/user.schema';
-import { Pet, PetDocument } from '../pets/schemas/pet.schema';
 
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
@@ -24,8 +23,6 @@ export class UsersService {
   constructor(
     @InjectModel(User.name)
     private readonly userModel: Model<UserDocument>,
-    @InjectModel(Pet.name)
-    private readonly petModel: Model<PetDocument>,
 
     @Inject(STORAGE_PROVIDER)
     private readonly storageProvider: StorageProvider,
@@ -213,6 +210,32 @@ export class UsersService {
     return this.userModel.countDocuments();
   }
 
+  // Feeds AdminService.broadcast() — every account that could plausibly
+  // receive and read a notification right now: ACTIVE (not still pending
+  // OTP verification, which has no session to see an in-app notification
+  // with) and not blocked. Optionally narrowed to one role (e.g. announcing
+  // something to admins only).
+  async findActiveRecipients(
+    role?: UserRole,
+  ): Promise<Array<{ id: string; email: string; phone?: string }>> {
+    const filter: QueryFilter<User> = {
+      status: AccountStatus.ACTIVE,
+      isActive: true,
+      ...(role ? { role } : {}),
+    };
+
+    const users = await this.userModel
+      .find(filter)
+      .select('_id email phone')
+      .lean();
+
+    return users.map((user) => ({
+      id: user._id.toString(),
+      email: user.email,
+      phone: user.phone || undefined,
+    }));
+  }
+
   async findById(id: string) {
     return this.userModel.findById(id).select('-password');
   }
@@ -344,20 +367,6 @@ export class UsersService {
 
       if (createdAt) {
         months[new Date(createdAt).getMonth()]++;
-      }
-    });
-
-    return months;
-  }
-
-  async monthlyQrScans() {
-    const months: number[] = new Array<number>(12).fill(0);
-
-    const pets = await this.petModel.find();
-
-    pets.forEach((pet) => {
-      if (pet.lastScannedAt) {
-        months[new Date(pet.lastScannedAt).getMonth()] += pet.scanCount;
       }
     });
 

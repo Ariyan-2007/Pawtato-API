@@ -54,8 +54,15 @@ export const envValidationSchema = Joi.object({
   // clear 503 at request time if these are unset rather than failing boot,
   // since this feature is additive and shouldn't block the rest of the API
   // from starting in an environment that hasn't set up Stripe yet.
-  STRIPE_SECRET_KEY: Joi.string().optional(),
-  STRIPE_WEBHOOK_SECRET: Joi.string().optional(),
+  // `.allow('')` alongside `.optional()`, not just `.optional()`: an unset
+  // var is `undefined` and passes `.optional()` fine, but an *empty-string*
+  // value (e.g. a blank `STRIPE_SECRET_KEY=` line, or test/global-setup.ts
+  // deliberately blanking these for e2e-isolation — see its own comment)
+  // fails Joi's default `string.empty` rule and crashes boot entirely,
+  // which is strictly worse than the "not configured" 503/skip behavior
+  // these vars are supposed to degrade to.
+  STRIPE_SECRET_KEY: Joi.string().allow('').optional(),
+  STRIPE_WEBHOOK_SECRET: Joi.string().allow('').optional(),
   TAG_UNIT_PRICE_CENTS: Joi.number().integer().min(1).default(999),
   STRIPE_CURRENCY: Joi.string().lowercase().default('usd'),
 
@@ -63,7 +70,7 @@ export const envValidationSchema = Joi.object({
   // than failing boot" pattern as Stripe above. Without these, PushChannel
   // logs a warning and skips sending instead of crashing the domain-event
   // listener that calls it. Generate a pair with `npm run vapid:generate`.
-  VAPID_PUBLIC_KEY: Joi.string().optional(),
-  VAPID_PRIVATE_KEY: Joi.string().optional(),
-  VAPID_SUBJECT: Joi.string().optional(),
+  VAPID_PUBLIC_KEY: Joi.string().allow('').optional(),
+  VAPID_PRIVATE_KEY: Joi.string().allow('').optional(),
+  VAPID_SUBJECT: Joi.string().allow('').optional(),
 });

@@ -84,4 +84,13 @@ export class StripeService {
       ? session.payment_intent
       : session.payment_intent?.id;
   }
+
+  // Used by the admin-cancel flow to refund a PAID (not yet FULFILLED)
+  // order — a full refund only, matching this feature's flat-rate,
+  // no-partial-fulfillment pricing model (see TagOrdersService.adminCancel).
+  async refundPayment(paymentIntentId: string): Promise<Stripe.Refund> {
+    return this.getClient().refunds.create({
+      payment_intent: paymentIntentId,
+    });
+  }
 }

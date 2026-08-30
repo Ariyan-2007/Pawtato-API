@@ -180,6 +180,66 @@ describe('Push notifications (e2e)', () => {
     });
   });
 
+  // Regression coverage for two real bugs found while writing this suite:
+  // (1) a request with `endpoint` but no `keys` reached the service as
+  // `dto.keys === undefined` and crashed with a 500 instead of a 400 — fixed
+  // by adding @IsNotEmptyObject() alongside @ValidateNested() on `keys`.
+  // (2) DELETE with no `endpoint` query param let Mongoose silently drop the
+  // filter field, so `findOneAndDelete({ endpoint: undefined, userId })` ran
+  // as `findOneAndDelete({ userId })` and would delete an arbitrary one of
+  // the caller's own subscriptions instead of erroring — fixed by validating
+  // the query through a DTO instead of a raw `@Query('endpoint')` string.
+  describe('malformed request handling', () => {
+    it('rejects a registration missing the keys object with 400, not 500', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/notifications/web-push-subscriptions')
+        .set('Authorization', `Bearer ${ownerAccessToken}`)
+        .send({ endpoint: `https://push.example.com/malformed-${runId}` })
+        .expect(400);
+
+      expect((res.body as { message: string[] }).message).toEqual([
+        'keys must be a non-empty object',
+      ]);
+    });
+
+    it('rejects a registration with a non-URL endpoint', async () => {
+      await request(app.getHttpServer())
+        .post('/api/notifications/web-push-subscriptions')
+        .set('Authorization', `Bearer ${ownerAccessToken}`)
+        .send({
+          endpoint: 'not-a-url',
+          keys: { p256dh: 'p256dh-value', auth: 'auth-value' },
+        })
+        .expect(400);
+    });
+
+    it('rejects unregistering with no endpoint query param, and does not delete an unrelated subscription', async () => {
+      const survivorEndpoint = `https://push.example.com/survivor-${runId}`;
+
+      await request(app.getHttpServer())
+        .post('/api/notifications/web-push-subscriptions')
+        .set('Authorization', `Bearer ${ownerAccessToken}`)
+        .send({
+          endpoint: survivorEndpoint,
+          keys: { p256dh: 'p256dh-value', auth: 'auth-value' },
+        })
+        .expect(201);
+
+      await request(app.getHttpServer())
+        .delete('/api/notifications/web-push-subscriptions')
+        .set('Authorization', `Bearer ${ownerAccessToken}`)
+        .expect(400);
+
+      // The unrelated subscription must still be there — a missing query
+      // param must never fall back to "delete something."
+      await request(app.getHttpServer())
+        .delete('/api/notifications/web-push-subscriptions')
+        .set('Authorization', `Bearer ${ownerAccessToken}`)
+        .query({ endpoint: survivorEndpoint })
+        .expect(200);
+    });
+  });
+
   describe('a pushed-eligible event actually reaches WebPushService', () => {
     let petId: string;
     let tagPublicCode: string;

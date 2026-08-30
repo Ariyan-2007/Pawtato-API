@@ -5,6 +5,7 @@ import {
   Get,
   Param,
   Patch,
+  Post,
   Query,
   UseGuards,
 } from '@nestjs/common';
@@ -38,6 +39,7 @@ import { DashboardStatsDto } from './dto/dashboard-stats.dto';
 import { DashboardAnalyticsDto } from './dto/dashboard-analytics.dto';
 import { AdminTagOrderQueryDto } from '../tag-orders/dto/admin-tag-order-query.dto';
 import { ShipTagOrderDto } from '../tag-orders/dto/ship-tag-order.dto';
+import { BroadcastNotificationDto } from './dto/broadcast-notification.dto';
 
 @ApiTags('Admin')
 @ApiBearerAuth('JWT-auth')
@@ -79,6 +81,10 @@ export class AdminController {
   @ApiOperation({ summary: 'Block a user (admin only)' })
   @ApiParam({ name: 'id', description: 'User ID' })
   @ApiResponse({ status: 200, description: 'User blocked.' })
+  @ApiResponse({
+    status: 400,
+    description: 'An admin cannot block their own account.',
+  })
   @Patch('users/:id/block')
   blockUser(
     @CurrentUser() user: JwtPayload,
@@ -100,6 +106,22 @@ export class AdminController {
     id: string,
   ) {
     return this.adminService.unblock(user.sub, id);
+  }
+
+  @ApiOperation({
+    summary:
+      'Manually verify a user, bypassing OTP (admin only). Activates the account for users who cannot complete OTP verification themselves.',
+  })
+  @ApiParam({ name: 'id', description: 'User ID' })
+  @ApiResponse({ status: 200, description: 'User verified/activated.' })
+  @Patch('users/:id/verify')
+  verifyUser(
+    @CurrentUser() user: JwtPayload,
+
+    @Param('id', ParseMongoIdPipe)
+    id: string,
+  ) {
+    return this.adminService.verifyUser(user.sub, id);
   }
 
   @ApiOperation({ summary: "Change a user's role (admin only)" })
@@ -429,5 +451,55 @@ export class AdminController {
     dto: ShipTagOrderDto,
   ) {
     return this.adminService.markTagOrderShipped(user.sub, id, dto);
+  }
+
+  @ApiOperation({
+    summary: 'Cancel a tag order (admin only)',
+    description:
+      'A PENDING_PAYMENT order is simply cancelled — nothing was ever charged. A PAID order is ' +
+      'refunded in full through Stripe first, and only marked CANCELLED once that succeeds. A ' +
+      'FULFILLED order (tags already shipped) cannot be cancelled here.',
+  })
+  @ApiParam({ name: 'id', description: 'Tag order ID' })
+  @ApiResponse({
+    status: 200,
+    description: 'Tag order cancelled (and refunded, if it was paid).',
+  })
+  @ApiResponse({ status: 404, description: 'Tag order not found.' })
+  @ApiResponse({
+    status: 400,
+    description: 'The order is already FULFILLED or CANCELLED.',
+  })
+  @Patch('tag-orders/:id/cancel')
+  cancelTagOrder(
+    @CurrentUser() user: JwtPayload,
+
+    @Param('id', ParseMongoIdPipe)
+    id: string,
+  ) {
+    return this.adminService.cancelTagOrder(user.sub, id);
+  }
+
+  @ApiOperation({
+    summary: 'Broadcast an in-app + email + push announcement (admin only)',
+    description:
+      'Reaches every currently ACTIVE, non-blocked account (or just one role, if `role` is set) — ' +
+      'e.g. a feature launch or planned-maintenance notice. Delivered through the exact same ' +
+      'notification pipeline every other event in this API already uses (in-app Notification, ' +
+      'email, and Web Push where the recipient has a subscription); there is no separate broadcast ' +
+      'delivery mechanism.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'The number of accounts the announcement was sent to.',
+  })
+  @Post('notifications/broadcast')
+  broadcast(
+    @CurrentUser() user: JwtPayload,
+
+    @Body()
+    dto: BroadcastNotificationDto,
+  ) {
+    return this.adminService.broadcast(user.sub, dto);
   }
 }

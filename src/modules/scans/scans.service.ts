@@ -86,6 +86,32 @@ export class ScansService {
       .sort({ createdAt: -1 });
   }
 
+  // Feeds the admin analytics dashboard's monthly-scans chart. Replaces the
+  // old UsersService.monthlyQrScans() heuristic (dumped a pet's *entire*
+  // scanCount into whichever month it was *last* scanned, and was never
+  // actually wired into AdminService.analytics() in the first place — the
+  // Swagger response shape declared a monthlyQrScans field the endpoint
+  // never populated). ScanEvent.createdAt is the real per-scan timestamp
+  // this project already records, so this counts real events instead.
+  async monthlyScanCounts(): Promise<number[]> {
+    const months: number[] = new Array<number>(12).fill(0);
+
+    const startOfYear = new Date(new Date().getFullYear(), 0, 1);
+
+    const scans = (await this.scanEventModel
+      .find({ createdAt: { $gte: startOfYear } })
+      .select('createdAt')
+      .lean()) as Array<ScanEvent & { createdAt?: Date }>;
+
+    scans.forEach((scan) => {
+      if (scan.createdAt) {
+        months[new Date(scan.createdAt).getMonth()]++;
+      }
+    });
+
+    return months;
+  }
+
   // Cascade delete — every scan event tied to any of these pets or tags.
   // Called from AdminService when a pet, a tag's owning pet, or a whole user
   // (pets + tags together) is deleted.

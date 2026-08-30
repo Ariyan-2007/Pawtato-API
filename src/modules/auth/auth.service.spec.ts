@@ -22,7 +22,7 @@ import { hashOtp } from './utils/otp.util';
 describe('AuthService', () => {
   let service: AuthService;
   let usersService: Record<string, jest.Mock>;
-  let jwtService: { signAsync: jest.Mock };
+  let jwtService: { signAsync: jest.Mock; verifyAsync: jest.Mock };
   let notificationsService: { sendTemplateEmail: jest.Mock };
 
   const RAW_OTP = '123456';
@@ -38,6 +38,7 @@ describe('AuthService', () => {
       password: 'hashed-password',
       role: 'USER',
       status: AccountStatus.PENDING_VERIFICATION,
+      isActive: true,
       otpHash: undefined,
       otpExpiresAt: undefined,
       otpAttempts: 0,
@@ -57,9 +58,13 @@ describe('AuthService', () => {
       setPasswordResetToken: jest.fn(),
       findByResetTokenHash: jest.fn(),
       resetPassword: jest.fn(),
+      findById: jest.fn(),
     };
 
-    jwtService = { signAsync: jest.fn().mockResolvedValue('signed-jwt') };
+    jwtService = {
+      signAsync: jest.fn().mockResolvedValue('signed-jwt'),
+      verifyAsync: jest.fn(),
+    };
 
     notificationsService = {
       sendTemplateEmail: jest.fn().mockResolvedValue(true),
@@ -72,7 +77,17 @@ describe('AuthService', () => {
         { provide: JwtService, useValue: jwtService },
         {
           provide: ConfigService,
-          useValue: { get: (_key: string, fallback?: unknown) => fallback },
+          useValue: {
+            get: (_key: string, fallback?: unknown) => fallback,
+            getOrThrow: (key: string) => {
+              const values: Record<string, string> = {
+                'jwt.refreshSecret': 'refresh-secret',
+                'jwt.refreshExpires': '7d',
+              };
+
+              return values[key];
+            },
+          },
         },
         { provide: NotificationsService, useValue: notificationsService },
       ],
@@ -252,6 +267,19 @@ describe('AuthService', () => {
       ).rejects.toThrow(UnauthorizedException);
       expect(usersService.setOtp).not.toHaveBeenCalled();
     });
+
+    it('rejects a blocked account even with correct credentials', async () => {
+      usersService.findByEmail.mockResolvedValue(
+        makeUser({ status: AccountStatus.ACTIVE, isActive: false }),
+      );
+
+      await expect(
+        service.login({
+          email: 'sarah@example.com',
+          password: 'correct-password',
+        }),
+      ).rejects.toThrow(UnauthorizedException);
+    });
   });
 
   describe('verifyOtp', () => {
@@ -386,6 +414,99 @@ describe('AuthService', () => {
         service.resendOtp({ email: 'sarah@example.com' }),
       ).rejects.toThrow(BadRequestException);
       expect(usersService.setOtp).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('refresh', () => {
+    it('rotates a valid refresh token into a new access+refresh pair', async () => {
+      jwtService.verifyAsync.mockResolvedValue({
+        sub: 'user-1',
+        email: 'sarah@example.com',
+        role: 'USER',
+        type: 'refresh',
+        iat: Math.floor(Date.now() / 1000),
+      });
+      usersService.findById.mockResolvedValue(
+        makeUser({ status: AccountStatus.ACTIVE }),
+      );
+
+      const result = await service.refresh({ refreshToken: 'old-refresh' });
+
+      expect(jwtService.verifyAsync).toHaveBeenCalledWith('old-refresh', {
+        secret: 'refresh-secret',
+      });
+      expect(result).toEqual(
+        expect.objectContaining({
+          accessToken: 'signed-jwt',
+          refreshToken: 'signed-jwt',
+        }),
+      );
+    });
+
+    it('rejects a token that fails verification (invalid/expired)', async () => {
+      jwtService.verifyAsync.mockRejectedValue(new Error('jwt expired'));
+
+      await expect(
+        service.refresh({ refreshToken: 'bad-token' }),
+      ).rejects.toThrow(UnauthorizedException);
+      expect(usersService.findById).not.toHaveBeenCalled();
+    });
+
+    it('rejects a token missing the refresh type marker (e.g. an access token replayed here)', async () => {
+      jwtService.verifyAsync.mockResolvedValue({
+        sub: 'user-1',
+        email: 'sarah@example.com',
+        role: 'USER',
+      });
+
+      await expect(
+        service.refresh({ refreshToken: 'access-token-not-refresh' }),
+      ).rejects.toThrow(UnauthorizedException);
+      expect(usersService.findById).not.toHaveBeenCalled();
+    });
+
+    it('rejects when the account no longer exists', async () => {
+      jwtService.verifyAsync.mockResolvedValue({
+        sub: 'user-1',
+        type: 'refresh',
+      });
+      usersService.findById.mockResolvedValue(null);
+
+      await expect(
+        service.refresh({ refreshToken: 'old-refresh' }),
+      ).rejects.toThrow(UnauthorizedException);
+    });
+
+    it('rejects a refresh token for a blocked account', async () => {
+      jwtService.verifyAsync.mockResolvedValue({
+        sub: 'user-1',
+        type: 'refresh',
+      });
+      usersService.findById.mockResolvedValue(
+        makeUser({ status: AccountStatus.ACTIVE, isActive: false }),
+      );
+
+      await expect(
+        service.refresh({ refreshToken: 'old-refresh' }),
+      ).rejects.toThrow(UnauthorizedException);
+    });
+
+    it('rejects a refresh token minted before a password change', async () => {
+      jwtService.verifyAsync.mockResolvedValue({
+        sub: 'user-1',
+        type: 'refresh',
+        iat: Math.floor(Date.now() / 1000) - 3600,
+      });
+      usersService.findById.mockResolvedValue(
+        makeUser({
+          status: AccountStatus.ACTIVE,
+          passwordChangedAt: new Date(),
+        }),
+      );
+
+      await expect(
+        service.refresh({ refreshToken: 'old-refresh' }),
+      ).rejects.toThrow(UnauthorizedException);
     });
   });
 });

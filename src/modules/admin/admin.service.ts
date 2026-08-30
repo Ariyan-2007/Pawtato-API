@@ -1,4 +1,9 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { UsersService } from '../users/users.service';
 import { PetsService } from '../pets/pets.service';
 import { TagsService } from '../tags/tags.service';
@@ -23,6 +28,8 @@ import { DatingReportStatus } from '../../common/enums/dating-report-status.enum
 import type { AdminIdentityVerificationQueryDto } from './dto/admin-identity-verification-query.dto';
 import type { AdminTagOrderQueryDto } from '../tag-orders/dto/admin-tag-order-query.dto';
 import type { ShipTagOrderDto } from '../tag-orders/dto/ship-tag-order.dto';
+import type { BroadcastNotificationDto } from './dto/broadcast-notification.dto';
+import { DOMAIN_EVENTS } from '../../common/events/domain-events';
 
 @Injectable()
 export class AdminService {
@@ -40,21 +47,83 @@ export class AdminService {
     private readonly caretakersService: CaretakersService,
     private readonly tagOrdersService: TagOrdersService,
     private readonly activityService: ActivityService,
+    private readonly eventEmitter: EventEmitter2,
   ) {}
 
   async dashboard(): Promise<DashboardStatsDto> {
+    const [
+      totalUsers,
+      totalPets,
+      lostPets,
+      recoveredPets,
+      totalVaccinations,
+      totalMedicalRecords,
+      tagBreakdown,
+      datingStats,
+      verificationBreakdown,
+      pendingFoundReports,
+      totalCaretakerGrants,
+      commerce,
+    ] = await Promise.all([
+      this.usersService.count(),
+      this.petsService.count(),
+      this.petsService.countLost(),
+      this.petsService.countRecovered(),
+      this.vaccinationsService.count(),
+      this.medicalService.count(),
+      this.tagsService.statusBreakdown(),
+      this.datingService.adminStats(),
+      this.identityVerificationService.countByStatus(),
+      this.foundReportsService.countPending(),
+      this.caretakersService.countAll(),
+      this.tagOrdersService.adminRevenueSummary(),
+    ]);
+
     return {
-      totalUsers: await this.usersService.count(),
+      totalUsers,
+      totalPets,
+      lostPets,
+      recoveredPets,
+      totalVaccinations,
+      totalMedicalRecords,
 
-      totalPets: await this.petsService.count(),
+      // Everything below is additive (Phase 20) — a "needs attention right
+      // now" and "how healthy is the platform" view for the dashboard's
+      // landing screen, not just raw resource counts.
+      tags: {
+        total: Object.values(tagBreakdown).reduce((sum, n) => sum + n, 0),
+        manufactured: tagBreakdown.MANUFACTURED,
+        available: tagBreakdown.AVAILABLE,
+        assigned: tagBreakdown.ASSIGNED,
+        suspended: tagBreakdown.SUSPENDED,
+        retired: tagBreakdown.RETIRED,
+      },
 
-      lostPets: await this.petsService.countLost(),
+      dating: {
+        activeProfiles: datingStats.activeProfiles,
+        totalMatches: datingStats.totalMatches,
+        activeMatches: datingStats.activeMatches,
+      },
 
-      recoveredPets: await this.petsService.countRecovered(),
+      caretakers: {
+        totalGrants: totalCaretakerGrants,
+      },
 
-      totalVaccinations: await this.vaccinationsService.count(),
+      commerce: {
+        pendingPayment: commerce.countByStatus.PENDING_PAYMENT,
+        paid: commerce.countByStatus.PAID,
+        fulfilled: commerce.countByStatus.FULFILLED,
+        totalRevenueCents: commerce.totalRevenueCents,
+        currency: commerce.currency,
+      },
 
-      totalMedicalRecords: await this.medicalService.count(),
+      // What an admin actually needs to act on today — the single most
+      // useful number on a moderation-heavy dashboard like this one.
+      pendingModeration: {
+        foundReports: pendingFoundReports,
+        datingReports: datingStats.pendingReports,
+        identityVerifications: verificationBreakdown.PENDING,
+      },
     };
   }
 
@@ -67,6 +136,10 @@ export class AdminService {
   }
 
   async block(actorId: string, id: string) {
+    if (actorId === id) {
+      throw new BadRequestException('You cannot block your own account.');
+    }
+
     const result = await this.usersService.blockUser(id);
 
     await this.activityService.log(actorId, 'admin.user.blocked', id);
@@ -88,6 +161,20 @@ export class AdminService {
     await this.activityService.log(actorId, 'admin.user.role-changed', id, {
       role,
     });
+
+    return result;
+  }
+
+  // Manually activates an account for a user who can't complete OTP
+  // verification themselves (e.g. never received the email). Reuses
+  // UsersService.activateAccount(), the same method the OTP flow itself
+  // calls on success, so this takes the identical path to ACTIVE — set
+  // status, clear any pending OTP state — rather than duplicating that
+  // logic here.
+  async verifyUser(actorId: string, id: string) {
+    const result = await this.usersService.activateAccount(id);
+
+    await this.activityService.log(actorId, 'admin.user.verified', id);
 
     return result;
   }
@@ -206,20 +293,81 @@ export class AdminService {
   }
 
   async analytics() {
+    const [
+      monthlyUsers,
+      monthlyPets,
+      monthlyQrScans,
+      speciesDistribution,
+      lost,
+      recovered,
+      topScannedPets,
+      tagBreakdown,
+      datingStats,
+      verificationBreakdown,
+      monthlyRevenue,
+    ] = await Promise.all([
+      this.usersService.monthlyRegistrations(),
+      this.petsService.monthlyRegistrations(),
+      this.scansService.monthlyScanCounts(),
+      this.petsService.speciesDistribution(),
+      this.petsService.countLost(),
+      this.petsService.countRecovered(),
+      this.petsService.topScannedPets(),
+      this.tagsService.statusBreakdown(),
+      this.datingService.adminStats(),
+      this.identityVerificationService.countByStatus(),
+      this.tagOrdersService.monthlyRevenue(),
+    ]);
+
+    const totalVerifications =
+      verificationBreakdown.PENDING +
+      verificationBreakdown.APPROVED +
+      verificationBreakdown.REJECTED;
+    const decidedVerifications =
+      verificationBreakdown.APPROVED + verificationBreakdown.REJECTED;
+
     return {
-      monthlyUsers: await this.usersService.monthlyRegistrations(),
+      monthlyUsers,
+      monthlyPets,
+      monthlyQrScans,
+      speciesDistribution,
+      lostVsRecovered: { lost, recovered },
+      topScannedPets,
 
-      monthlyPets: await this.petsService.monthlyRegistrations(),
+      // Additive (Phase 20) — see PAWTATO_ROADMAP.md Phase 20 for why these
+      // were added: the dashboard's raw resource counts didn't cover
+      // engagement (dating), trust (verification approval rate), or revenue
+      // at all, despite all three being live, business-relevant subsystems.
+      tagStatusBreakdown: Object.entries(tagBreakdown).map(
+        ([status, count]) => ({ status, count }),
+      ),
 
-      speciesDistribution: await this.petsService.speciesDistribution(),
-
-      lostVsRecovered: {
-        lost: await this.petsService.countLost(),
-
-        recovered: await this.petsService.countRecovered(),
+      datingFunnel: {
+        totalSwipes: datingStats.totalSwipes,
+        totalLikes: datingStats.totalLikes,
+        totalMatches: datingStats.totalMatches,
+        // 0 rather than a misleading 0%-looks-like-"working fine" figure
+        // when nobody has liked anything yet — same reasoning as
+        // DatingService.adminStats()'s own matchRate.
+        matchRate: datingStats.matchRate,
       },
 
-      topScannedPets: await this.petsService.topScannedPets(),
+      identityVerification: {
+        pending: verificationBreakdown.PENDING,
+        approved: verificationBreakdown.APPROVED,
+        rejected: verificationBreakdown.REJECTED,
+        // Of submissions actually decided (excludes the still-pending
+        // queue), what fraction were approved — a rejected-heavy rate is a
+        // signal worth an admin's attention (bad instructions? bad-faith
+        // submissions?) that a bare pending count can't show.
+        approvalRate:
+          decidedVerifications === 0
+            ? 0
+            : verificationBreakdown.APPROVED / decidedVerifications,
+        totalSubmissions: totalVerifications,
+      },
+
+      monthlyRevenue,
     };
   }
 
@@ -281,5 +429,44 @@ export class AdminService {
     reason: string,
   ) {
     return this.identityVerificationService.adminReject(actorId, id, reason);
+  }
+
+  async cancelTagOrder(actorId: string, id: string) {
+    return this.tagOrdersService.adminCancel(actorId, id);
+  }
+
+  // Fans out one ADMIN_BROADCAST domain event per targeted recipient,
+  // reusing the exact same notification-creation + email/push channel path
+  // every other event type already goes through (DomainEventsListener) —
+  // no separate broadcast-delivery code exists anywhere else. Emitted
+  // fire-and-forget per recipient (in-process EventEmitter2, not a queue):
+  // fine at this platform's current scale, but a genuinely large user base
+  // would want this moved to a background job so one admin action doesn't
+  // block on thousands of synchronous listener invocations.
+  async broadcast(actorId: string, dto: BroadcastNotificationDto) {
+    const recipients = await this.usersService.findActiveRecipients(dto.role);
+
+    for (const recipient of recipients) {
+      this.eventEmitter.emit(DOMAIN_EVENTS.ADMIN_BROADCAST, {
+        ownerId: recipient.id,
+        ownerEmail: recipient.email,
+        ownerPhone: recipient.phone,
+        title: dto.title,
+        message: dto.message,
+      });
+    }
+
+    await this.activityService.log(
+      actorId,
+      'admin.notification.broadcast',
+      actorId,
+      {
+        role: dto.role ?? 'ALL',
+        recipientCount: recipients.length,
+        title: dto.title,
+      },
+    );
+
+    return { recipientCount: recipients.length };
   }
 }
