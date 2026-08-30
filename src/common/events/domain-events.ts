@@ -28,6 +28,13 @@ export const DOMAIN_EVENTS = {
   DATING_MATCH_CREATED: 'dating.match-created',
   DATING_MESSAGE_SENT: 'dating.message-sent',
   DATING_MATCH_UNMATCHED: 'dating.match-unmatched',
+  // Admin-authored announcement (e.g. a feature launch, planned maintenance)
+  // fanned out to a set of recipients — see AdminService.broadcast(). One
+  // event per recipient, same "emitter builds the full payload, one event
+  // per owner" convention as every event above, so this reuses the exact
+  // same notification-creation + channel fan-out path with zero new plumbing
+  // in DomainEventsListener beyond a single new case.
+  ADMIN_BROADCAST: 'admin.broadcast',
 } as const;
 
 export type DomainEventName =
@@ -146,4 +153,12 @@ export interface DatingMatchUnmatchedEvent {
   unmatchedBy: string;
   ownerAId: string;
   ownerBId: string;
+}
+
+export interface AdminBroadcastEvent {
+  ownerId: string;
+  ownerEmail: string;
+  ownerPhone?: string;
+  title: string;
+  message: string;
 }

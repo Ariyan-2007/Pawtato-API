@@ -22,11 +22,13 @@ describe('TagOrdersService', () => {
     findById: jest.Mock;
     find: jest.Mock;
     countDocuments: jest.Mock;
+    aggregate: jest.Mock;
   };
   let configService: { get: jest.Mock; getOrThrow: jest.Mock };
   let stripeService: {
     createCheckoutSession: jest.Mock;
     extractPaymentIntentId: jest.Mock;
+    refundPayment: jest.Mock;
   };
   let tagsService: { mintManufacturedBatch: jest.Mock };
   let activityService: { log: jest.Mock };
@@ -47,11 +49,20 @@ describe('TagOrdersService', () => {
       findById: jest.fn(),
       find: jest.fn(),
       countDocuments: jest.fn(),
+      aggregate: jest.fn(),
     };
     configService = {
-      get: jest.fn((key: string) =>
-        key === 'app.frontendUrl' ? 'https://app.pawtato.com' : undefined,
-      ),
+      get: jest.fn((key: string, fallback?: unknown) => {
+        if (key === 'app.frontendUrl') {
+          return 'https://app.pawtato.com';
+        }
+
+        if (key === 'stripe.currency') {
+          return fallback ?? 'usd';
+        }
+
+        return fallback;
+      }),
       getOrThrow: jest.fn((key: string) => {
         const values: Record<string, unknown> = {
           'stripe.tagUnitPriceCents': 999,
@@ -63,6 +74,7 @@ describe('TagOrdersService', () => {
     stripeService = {
       createCheckoutSession: jest.fn(),
       extractPaymentIntentId: jest.fn().mockReturnValue('pi_123'),
+      refundPayment: jest.fn().mockResolvedValue({ id: 're_123' }),
     };
     tagsService = { mintManufacturedBatch: jest.fn() };
     activityService = { log: jest.fn().mockResolvedValue(undefined) };
@@ -236,6 +248,135 @@ describe('TagOrdersService', () => {
         order._id.toString(),
         { trackingNumber: 'TRACK1' },
       );
+    });
+  });
+
+  describe('adminCancel', () => {
+    it('throws NotFoundException for an unknown order', async () => {
+      tagOrderModel.findById.mockResolvedValue(null);
+
+      await expect(service.adminCancel('admin-1', 'id')).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+
+    it.each([TagOrderStatus.FULFILLED, TagOrderStatus.CANCELLED])(
+      'rejects cancelling an order that is already %s',
+      async (status) => {
+        tagOrderModel.findById.mockResolvedValue({ status });
+
+        await expect(service.adminCancel('admin-1', 'id')).rejects.toThrow(
+          BadRequestException,
+        );
+        expect(stripeService.refundPayment).not.toHaveBeenCalled();
+      },
+    );
+
+    it('cancels a PENDING_PAYMENT order outright, with no refund call', async () => {
+      const order = {
+        _id: new Types.ObjectId(),
+        status: TagOrderStatus.PENDING_PAYMENT,
+        save: jest.fn().mockResolvedValue(undefined),
+      };
+      tagOrderModel.findById.mockResolvedValue(order);
+
+      await service.adminCancel('admin-1', 'id');
+
+      expect(stripeService.refundPayment).not.toHaveBeenCalled();
+      expect(order.status).toBe(TagOrderStatus.CANCELLED);
+      expect(order.save).toHaveBeenCalled();
+      expect(activityService.log).toHaveBeenCalledWith(
+        'admin-1',
+        'tag-order.cancelled',
+        order._id.toString(),
+        { refunded: false },
+      );
+    });
+
+    it('refunds a PAID order through Stripe before marking it CANCELLED', async () => {
+      const order = {
+        _id: new Types.ObjectId(),
+        status: TagOrderStatus.PAID,
+        stripePaymentIntentId: 'pi_123',
+        save: jest.fn().mockResolvedValue(undefined),
+      };
+      tagOrderModel.findById.mockResolvedValue(order);
+
+      await service.adminCancel('admin-1', 'id');
+
+      expect(stripeService.refundPayment).toHaveBeenCalledWith('pi_123');
+      expect(order.status).toBe(TagOrderStatus.CANCELLED);
+      expect(activityService.log).toHaveBeenCalledWith(
+        'admin-1',
+        'tag-order.cancelled',
+        order._id.toString(),
+        { refunded: true },
+      );
+    });
+
+    it('refuses to cancel a PAID order with no recorded payment intent, rather than silently skipping the refund', async () => {
+      tagOrderModel.findById.mockResolvedValue({
+        status: TagOrderStatus.PAID,
+        stripePaymentIntentId: undefined,
+      });
+
+      await expect(service.adminCancel('admin-1', 'id')).rejects.toThrow(
+        BadRequestException,
+      );
+      expect(stripeService.refundPayment).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('adminRevenueSummary', () => {
+    it('combines the status-count aggregation with the revenue-sum aggregation', async () => {
+      tagOrderModel.aggregate
+        .mockResolvedValueOnce([
+          { _id: TagOrderStatus.PAID, count: 2 },
+          { _id: TagOrderStatus.FULFILLED, count: 1 },
+        ])
+        .mockResolvedValueOnce([{ _id: null, totalCents: 5000 }]);
+
+      const result = await service.adminRevenueSummary();
+
+      expect(result).toEqual({
+        countByStatus: {
+          PENDING_PAYMENT: 0,
+          PAID: 2,
+          FULFILLED: 1,
+          CANCELLED: 0,
+        },
+        totalRevenueCents: 5000,
+        currency: 'usd',
+      });
+    });
+
+    it('reports zero revenue rather than throwing when nothing has been paid yet', async () => {
+      tagOrderModel.aggregate
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([]);
+
+      const result = await service.adminRevenueSummary();
+
+      expect(result.totalRevenueCents).toBe(0);
+    });
+  });
+
+  describe('monthlyRevenue', () => {
+    it('buckets PAID/FULFILLED orders by the calendar month they were paid in', async () => {
+      const paidInJanuary = new Date(new Date().getFullYear(), 0, 15);
+      tagOrderModel.find.mockReturnValue({
+        select: jest.fn().mockReturnThis(),
+        lean: jest.fn().mockReturnThis(),
+        exec: jest.fn().mockResolvedValue([
+          { totalAmountCents: 1000, paidAt: paidInJanuary },
+          { totalAmountCents: 500, paidAt: paidInJanuary },
+        ]),
+      });
+
+      const result = await service.monthlyRevenue();
+
+      expect(result[0]).toBe(1500);
+      expect(result.filter((_, i) => i !== 0).every((n) => n === 0)).toBe(true);
     });
   });
 });

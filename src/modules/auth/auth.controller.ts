@@ -16,6 +16,7 @@ import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { ResendOtpDto } from './dto/resend-otp.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
+import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import {
@@ -70,6 +71,29 @@ export class AuthController {
   @Post('login')
   login(@Body() loginDto: LoginDto) {
     return this.authService.login(loginDto);
+  }
+
+  @ApiOperation({
+    summary: 'Exchange a refresh token for a new access+refresh token pair',
+    description:
+      'Rotates the refresh token on every call — the token used here is no longer accepted once a ' +
+      'new pair has been issued from it. Call this when an API request 401s with an expired access ' +
+      'token, rather than sending the user back through login. Subject to the same liveness checks ' +
+      'as any access token (blocked/deactivated account, or issued before a password change).',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'New accessToken + refreshToken + user.',
+  })
+  @ApiResponse({
+    status: 401,
+    description: 'Invalid, expired, or already-rotated-away refresh token.',
+  })
+  @Throttle({ write: { limit: 20, ttl: 60_000 } })
+  @HttpCode(HttpStatus.OK)
+  @Post('refresh')
+  refresh(@Body() dto: RefreshTokenDto) {
+    return this.authService.refresh(dto);
   }
 
   @ApiOperation({ summary: 'Get the currently authenticated user' })

@@ -23,6 +23,8 @@ import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { ResendOtpDto } from './dto/resend-otp.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
+import { RefreshTokenDto } from './dto/refresh-token.dto';
+import type { JwtPayload } from './interfaces/jwt-payload.interface';
 import { generateToken, hashToken } from './utils/token.util';
 import { generateOtp, hashOtp, otpHashesMatch } from './utils/otp.util';
 import { normalizeEmail } from './utils/email.util';
@@ -44,9 +46,19 @@ const GENERIC_RESEND_OTP_MESSAGE =
   'If that account exists and needs verification, a new code has been sent.';
 const PENDING_VERIFICATION_MESSAGE = 'Verification code sent to your email.';
 const INVALID_CREDENTIALS_MESSAGE = 'Invalid email or password';
+const ACCOUNT_BLOCKED_MESSAGE =
+  'This account has been blocked. Please contact support.';
 const INVALID_OTP_MESSAGE = 'Invalid or expired OTP.';
 const OTP_ATTEMPTS_EXCEEDED_MESSAGE =
   'Too many incorrect attempts. Please request a new verification code.';
+const INVALID_REFRESH_TOKEN_MESSAGE = 'Invalid or expired refresh token.';
+
+// Embedded in a refresh token's payload so it can never be accepted by
+// anything expecting an access token by shape alone — belt-and-suspenders
+// alongside the fact the two are signed with different secrets
+// (jwt.secret vs jwt.refreshSecret), which alone already prevents either
+// token type validating as the other.
+const REFRESH_TOKEN_TYPE = 'refresh';
 
 @Injectable()
 export class AuthService {
@@ -135,6 +147,14 @@ export class AuthService {
 
     if (!isPasswordValid) {
       throw new UnauthorizedException(INVALID_CREDENTIALS_MESSAGE);
+    }
+
+    // isActive (admin block/unblock) is independent of status (the
+    // OTP/email-verification lifecycle) — checked here too, not just in
+    // JwtStrategy.validate(), so a blocked user can't just log back in and
+    // mint a fresh token after their existing session gets rejected.
+    if (!user.isActive) {
+      throw new UnauthorizedException(ACCOUNT_BLOCKED_MESSAGE);
     }
 
     // Credentials are valid, but a pending account must never receive an
@@ -299,6 +319,46 @@ export class AuthService {
     return { message: 'Password reset successfully. You can now log in.' };
   }
 
+  // Verifies a previously issued refresh token and mints a brand-new
+  // access+refresh pair (rotation) rather than just a fresh access token —
+  // there's no server-side refresh-token store in this codebase (same
+  // stateless-JWT design JwtStrategy already documents), so rotation is the
+  // only way an old refresh token stops being useful once a newer one has
+  // been issued from it, without needing a revocation list.
+  async refresh(dto: RefreshTokenDto) {
+    let payload: JwtPayload & { type?: string };
+
+    try {
+      payload = await this.jwtService.verifyAsync(dto.refreshToken, {
+        secret: this.configService.getOrThrow<string>('jwt.refreshSecret'),
+      });
+    } catch {
+      throw new UnauthorizedException(INVALID_REFRESH_TOKEN_MESSAGE);
+    }
+
+    if (payload.type !== REFRESH_TOKEN_TYPE) {
+      throw new UnauthorizedException(INVALID_REFRESH_TOKEN_MESSAGE);
+    }
+
+    const user = await this.usersService.findById(payload.sub);
+
+    // Same liveness checks JwtStrategy applies to an access token — a
+    // refresh token minted before a block/deactivation/password-change
+    // must not be able to mint a fresh access token either.
+    if (
+      !user ||
+      !user.isActive ||
+      user.status !== AccountStatus.ACTIVE ||
+      (user.passwordChangedAt &&
+        payload.iat !== undefined &&
+        payload.iat * 1000 < user.passwordChangedAt.getTime())
+    ) {
+      throw new UnauthorizedException(INVALID_REFRESH_TOKEN_MESSAGE);
+    }
+
+    return this.buildAuthResponse(user);
+  }
+
   private async buildAuthResponse(user: UserDocument) {
     const payload = {
       sub: user.id,
@@ -306,8 +366,25 @@ export class AuthService {
       role: user.role,
     };
 
+    const [accessToken, refreshToken] = await Promise.all([
+      this.jwtService.signAsync(payload),
+      this.jwtService.signAsync(
+        { ...payload, type: REFRESH_TOKEN_TYPE },
+        {
+          secret: this.configService.getOrThrow<string>('jwt.refreshSecret'),
+          // env-driven value, can't satisfy @nestjs/jwt's StringValue
+          // template-literal type at compile time — same cast auth.module.ts
+          // already needs for the access token's own expiresIn.
+          expiresIn: this.configService.getOrThrow<string>(
+            'jwt.refreshExpires',
+          ) as never,
+        },
+      ),
+    ]);
+
     return {
-      accessToken: await this.jwtService.signAsync(payload),
+      accessToken,
+      refreshToken,
       user: {
         id: user.id,
         fullName: user.fullName,

@@ -498,4 +498,24 @@ export class TagsService {
       assignedPetId: new Types.ObjectId(petId),
     });
   }
+
+  // Feeds the admin dashboard's tag-inventory widget — a single grouped
+  // count query rather than one countDocuments() call per status, so
+  // adding this to the dashboard doesn't add N round-trips for N statuses.
+  async statusBreakdown(): Promise<Record<TagStatus, number>> {
+    const rows = await this.tagModel.aggregate<{
+      _id: TagStatus;
+      count: number;
+    }>([{ $group: { _id: '$status', count: { $sum: 1 } } }]);
+
+    const breakdown = Object.fromEntries(
+      Object.values(TagStatus).map((status) => [status, 0]),
+    ) as Record<TagStatus, number>;
+
+    for (const row of rows) {
+      breakdown[row._id] = row.count;
+    }
+
+    return breakdown;
+  }
 }

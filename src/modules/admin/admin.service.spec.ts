@@ -1,5 +1,6 @@
 import { NotFoundException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { AdminService } from './admin.service';
 import { UsersService } from '../users/users.service';
 import { PetsService } from '../pets/pets.service';
@@ -29,6 +30,8 @@ describe('AdminService', () => {
     unblockUser: jest.Mock;
     changeRole: jest.Mock;
     deleteUser: jest.Mock;
+    monthlyRegistrations: jest.Mock;
+    findActiveRecipients: jest.Mock;
   };
   let petsService: {
     count: jest.Mock;
@@ -38,20 +41,28 @@ describe('AdminService', () => {
     deletePet: jest.Mock;
     findIdsForOwner: jest.Mock;
     deleteAllForOwner: jest.Mock;
+    monthlyRegistrations: jest.Mock;
+    speciesDistribution: jest.Mock;
+    topScannedPets: jest.Mock;
   };
   let tagsService: {
     findIdsForOwner: jest.Mock;
     findIdsForPet: jest.Mock;
     deleteAllForOwner: jest.Mock;
     deleteAllForPet: jest.Mock;
+    statusBreakdown: jest.Mock;
   };
-  let scansService: { deleteAllForPetsAndTags: jest.Mock };
+  let scansService: {
+    deleteAllForPetsAndTags: jest.Mock;
+    monthlyScanCounts: jest.Mock;
+  };
   let vaccinationsService: { count: jest.Mock; deleteAllForPets: jest.Mock };
   let medicalService: { count: jest.Mock; deleteAllForPets: jest.Mock };
   let foundReportsService: {
     findAllAdmin: jest.Mock;
     updateStatus: jest.Mock;
     deleteAllForPetsAndTags: jest.Mock;
+    countPending: jest.Mock;
   };
   let notificationsService: { deleteAllForUser: jest.Mock };
   let datingService: {
@@ -60,6 +71,7 @@ describe('AdminService', () => {
     adminListReports: jest.Mock;
     adminUpdateReportStatus: jest.Mock;
     adminDeactivateProfile: jest.Mock;
+    adminStats: jest.Mock;
   };
   let identityVerificationService: {
     adminList: jest.Mock;
@@ -67,13 +79,22 @@ describe('AdminService', () => {
     adminApprove: jest.Mock;
     adminReject: jest.Mock;
     deleteForUser: jest.Mock;
+    countByStatus: jest.Mock;
   };
   let caretakersService: {
     deleteAllForPets: jest.Mock;
     deleteAllForCaretakerUser: jest.Mock;
+    countAll: jest.Mock;
   };
-  let tagOrdersService: { adminList: jest.Mock; adminMarkShipped: jest.Mock };
+  let tagOrdersService: {
+    adminList: jest.Mock;
+    adminMarkShipped: jest.Mock;
+    adminCancel: jest.Mock;
+    adminRevenueSummary: jest.Mock;
+    monthlyRevenue: jest.Mock;
+  };
   let activityService: { log: jest.Mock };
+  let eventEmitter: { emit: jest.Mock };
 
   const actorId = 'admin-1';
 
@@ -85,6 +106,8 @@ describe('AdminService', () => {
       unblockUser: jest.fn().mockResolvedValue({ blocked: false }),
       changeRole: jest.fn().mockResolvedValue({ role: UserRole.ADMIN }),
       deleteUser: jest.fn().mockResolvedValue({ message: 'deleted' }),
+      monthlyRegistrations: jest.fn().mockResolvedValue(new Array(12).fill(0)),
+      findActiveRecipients: jest.fn().mockResolvedValue([]),
     };
     petsService = {
       count: jest.fn().mockResolvedValue(5),
@@ -94,15 +117,26 @@ describe('AdminService', () => {
       deletePet: jest.fn().mockResolvedValue({ message: 'deleted' }),
       findIdsForOwner: jest.fn().mockResolvedValue([]),
       deleteAllForOwner: jest.fn().mockResolvedValue({ deletedCount: 0 }),
+      monthlyRegistrations: jest.fn().mockResolvedValue(new Array(12).fill(0)),
+      speciesDistribution: jest.fn().mockResolvedValue([]),
+      topScannedPets: jest.fn().mockResolvedValue([]),
     };
     tagsService = {
       findIdsForOwner: jest.fn().mockResolvedValue([]),
       findIdsForPet: jest.fn().mockResolvedValue([]),
       deleteAllForOwner: jest.fn().mockResolvedValue({ deletedCount: 0 }),
       deleteAllForPet: jest.fn().mockResolvedValue({ deletedCount: 0 }),
+      statusBreakdown: jest.fn().mockResolvedValue({
+        MANUFACTURED: 1,
+        AVAILABLE: 2,
+        ASSIGNED: 3,
+        SUSPENDED: 0,
+        RETIRED: 0,
+      }),
     };
     scansService = {
       deleteAllForPetsAndTags: jest.fn().mockResolvedValue({ deletedCount: 0 }),
+      monthlyScanCounts: jest.fn().mockResolvedValue(new Array(12).fill(0)),
     };
     vaccinationsService = {
       count: jest.fn().mockResolvedValue(7),
@@ -118,6 +152,7 @@ describe('AdminService', () => {
         .fn()
         .mockResolvedValue({ status: FoundReportStatus.REVIEWED }),
       deleteAllForPetsAndTags: jest.fn().mockResolvedValue({ deletedCount: 0 }),
+      countPending: jest.fn().mockResolvedValue(0),
     };
     notificationsService = {
       deleteAllForUser: jest.fn().mockResolvedValue({ deletedCount: 0 }),
@@ -130,6 +165,16 @@ describe('AdminService', () => {
         .fn()
         .mockResolvedValue({ status: DatingReportStatus.REVIEWED }),
       adminDeactivateProfile: jest.fn().mockResolvedValue({ isActive: false }),
+      adminStats: jest.fn().mockResolvedValue({
+        totalProfiles: 0,
+        activeProfiles: 0,
+        totalMatches: 0,
+        activeMatches: 0,
+        pendingReports: 0,
+        totalSwipes: 0,
+        totalLikes: 0,
+        matchRate: 0,
+      }),
     };
     identityVerificationService = {
       adminList: jest.fn().mockResolvedValue({ verifications: [] }),
@@ -143,20 +188,39 @@ describe('AdminService', () => {
         .fn()
         .mockResolvedValue({ status: IdentityVerificationStatus.REJECTED }),
       deleteForUser: jest.fn().mockResolvedValue({ deletedCount: 0 }),
+      countByStatus: jest
+        .fn()
+        .mockResolvedValue({ PENDING: 0, APPROVED: 0, REJECTED: 0 }),
     };
     caretakersService = {
       deleteAllForPets: jest.fn().mockResolvedValue({ deletedCount: 0 }),
       deleteAllForCaretakerUser: jest
         .fn()
         .mockResolvedValue({ deletedCount: 0 }),
+      countAll: jest.fn().mockResolvedValue(0),
     };
     tagOrdersService = {
       adminList: jest.fn().mockResolvedValue({ orders: [] }),
       adminMarkShipped: jest
         .fn()
         .mockResolvedValue({ status: TagOrderStatus.FULFILLED }),
+      adminCancel: jest
+        .fn()
+        .mockResolvedValue({ status: TagOrderStatus.CANCELLED }),
+      adminRevenueSummary: jest.fn().mockResolvedValue({
+        countByStatus: {
+          PENDING_PAYMENT: 0,
+          PAID: 0,
+          FULFILLED: 0,
+          CANCELLED: 0,
+        },
+        totalRevenueCents: 0,
+        currency: 'usd',
+      }),
+      monthlyRevenue: jest.fn().mockResolvedValue(new Array(12).fill(0)),
     };
     activityService = { log: jest.fn().mockResolvedValue(undefined) };
+    eventEmitter = { emit: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -177,6 +241,7 @@ describe('AdminService', () => {
         { provide: CaretakersService, useValue: caretakersService },
         { provide: TagOrdersService, useValue: tagOrdersService },
         { provide: ActivityService, useValue: activityService },
+        { provide: EventEmitter2, useValue: eventEmitter },
       ],
     }).compile();
 
@@ -198,7 +263,113 @@ describe('AdminService', () => {
         recoveredPets: 3,
         totalVaccinations: 7,
         totalMedicalRecords: 4,
+        tags: {
+          total: 6,
+          manufactured: 1,
+          available: 2,
+          assigned: 3,
+          suspended: 0,
+          retired: 0,
+        },
+        dating: { activeProfiles: 0, totalMatches: 0, activeMatches: 0 },
+        caretakers: { totalGrants: 0 },
+        commerce: {
+          pendingPayment: 0,
+          paid: 0,
+          fulfilled: 0,
+          totalRevenueCents: 0,
+          currency: 'usd',
+        },
+        pendingModeration: {
+          foundReports: 0,
+          datingReports: 0,
+          identityVerifications: 0,
+        },
       });
+    });
+  });
+
+  describe('analytics', () => {
+    it('aggregates figures from every dependent service, including the funnel/revenue additions', async () => {
+      const result = await service.analytics();
+
+      expect(result).toEqual(
+        expect.objectContaining({
+          monthlyUsers: expect.any(Array) as unknown[],
+          monthlyPets: expect.any(Array) as unknown[],
+          monthlyQrScans: expect.any(Array) as unknown[],
+          tagStatusBreakdown: expect.arrayContaining([
+            { status: 'ASSIGNED', count: 3 },
+          ]) as unknown[],
+          datingFunnel: {
+            totalSwipes: 0,
+            totalLikes: 0,
+            totalMatches: 0,
+            matchRate: 0,
+          },
+          identityVerification: {
+            pending: 0,
+            approved: 0,
+            rejected: 0,
+            approvalRate: 0,
+            totalSubmissions: 0,
+          },
+          monthlyRevenue: expect.any(Array) as unknown[],
+        }),
+      );
+      expect(scansService.monthlyScanCounts).toHaveBeenCalled();
+      expect(tagOrdersService.monthlyRevenue).toHaveBeenCalled();
+    });
+  });
+
+  describe('broadcast', () => {
+    it('emits one ADMIN_BROADCAST event per active recipient and logs a single audit entry', async () => {
+      usersService.findActiveRecipients.mockResolvedValue([
+        { id: 'user-1', email: 'a@example.com', phone: undefined },
+        { id: 'user-2', email: 'b@example.com', phone: '+880100' },
+      ]);
+
+      const result = await service.broadcast(actorId, {
+        title: 'New feature',
+        message: 'Check it out',
+      });
+
+      expect(usersService.findActiveRecipients).toHaveBeenCalledWith(undefined);
+      expect(eventEmitter.emit).toHaveBeenCalledTimes(2);
+      expect(eventEmitter.emit).toHaveBeenCalledWith(
+        'admin.broadcast',
+        expect.objectContaining({ ownerId: 'user-1', title: 'New feature' }),
+      );
+      expect(activityService.log).toHaveBeenCalledWith(
+        actorId,
+        'admin.notification.broadcast',
+        actorId,
+        expect.objectContaining({ recipientCount: 2 }),
+      );
+      expect(result).toEqual({ recipientCount: 2 });
+    });
+
+    it('passes the role filter through to UsersService.findActiveRecipients', async () => {
+      await service.broadcast(actorId, {
+        title: 'Admins only',
+        message: 'FYI',
+        role: UserRole.ADMIN,
+      });
+
+      expect(usersService.findActiveRecipients).toHaveBeenCalledWith(
+        UserRole.ADMIN,
+      );
+    });
+  });
+
+  describe('cancelTagOrder', () => {
+    it('delegates to TagOrdersService.adminCancel', async () => {
+      await service.cancelTagOrder(actorId, 'order-1');
+
+      expect(tagOrdersService.adminCancel).toHaveBeenCalledWith(
+        actorId,
+        'order-1',
+      );
     });
   });
 

@@ -20,6 +20,7 @@ describe('IdentityVerificationService', () => {
     distinct: jest.Mock;
     findByIdAndUpdate: jest.Mock;
     deleteOne: jest.Mock;
+    aggregate: jest.Mock;
   };
   let storageProvider: {
     uploadPrivate: jest.Mock;
@@ -46,6 +47,7 @@ describe('IdentityVerificationService', () => {
       distinct: jest.fn().mockResolvedValue([]),
       findByIdAndUpdate: jest.fn(),
       deleteOne: jest.fn().mockResolvedValue(undefined),
+      aggregate: jest.fn(),
     };
     storageProvider = {
       uploadPrivate: jest
@@ -290,6 +292,23 @@ describe('IdentityVerificationService', () => {
       expect(storageProvider.deletePrivate).toHaveBeenCalledWith('back-key');
       expect(verificationModel.deleteOne).toHaveBeenCalledWith({ _id: 'v1' });
       expect(result).toEqual({ deletedCount: 1 });
+    });
+  });
+
+  describe('countByStatus', () => {
+    it('fills in every status at 0, overridden by whatever the aggregation returns', async () => {
+      verificationModel.aggregate.mockResolvedValue([
+        { _id: IdentityVerificationStatus.PENDING, count: 3 },
+        { _id: IdentityVerificationStatus.APPROVED, count: 5 },
+      ]);
+
+      const result = await service.countByStatus();
+
+      expect(result).toEqual({
+        PENDING: 3,
+        APPROVED: 5,
+        REJECTED: 0,
+      });
     });
   });
 });

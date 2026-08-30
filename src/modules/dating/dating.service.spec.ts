@@ -40,6 +40,7 @@ describe('DatingService', () => {
     findOne: jest.Mock;
     distinct: jest.Mock;
     deleteMany: jest.Mock;
+    aggregate: jest.Mock;
   };
   let matchModel: {
     create: jest.Mock;
@@ -47,6 +48,7 @@ describe('DatingService', () => {
     findById: jest.Mock;
     find: jest.Mock;
     deleteMany: jest.Mock;
+    countDocuments: jest.Mock;
   };
   let messageModel: {
     create: jest.Mock;
@@ -117,6 +119,7 @@ describe('DatingService', () => {
       findOne: jest.fn(),
       distinct: jest.fn().mockResolvedValue([]),
       deleteMany: jest.fn().mockResolvedValue({ deletedCount: 0 }),
+      aggregate: jest.fn().mockResolvedValue([]),
     };
     matchModel = {
       create: jest.fn(),
@@ -124,6 +127,7 @@ describe('DatingService', () => {
       findById: jest.fn(),
       find: jest.fn().mockResolvedValue([]),
       deleteMany: jest.fn().mockResolvedValue({ deletedCount: 0 }),
+      countDocuments: jest.fn().mockResolvedValue(0),
     };
     messageModel = {
       create: jest.fn(),
@@ -1548,6 +1552,47 @@ describe('DatingService', () => {
         reporterUserId: new Types.ObjectId(ownerId),
       });
       expect(result).toEqual({ deletedCount: 2 });
+    });
+  });
+
+  describe('adminStats', () => {
+    it('computes matchRate from LIKE swipes vs. total matches, and 0 with no likes yet', async () => {
+      profileModel.countDocuments
+        .mockResolvedValueOnce(10) // totalProfiles
+        .mockResolvedValueOnce(6); // activeProfiles
+      matchModel.countDocuments
+        .mockResolvedValueOnce(3) // totalMatches
+        .mockResolvedValueOnce(2); // activeMatches
+      datingReportModel.countDocuments.mockResolvedValue(1); // pendingReports
+      swipeModel.aggregate.mockResolvedValue([
+        { _id: SwipeAction.LIKE, count: 6 },
+        { _id: SwipeAction.PASS, count: 4 },
+      ]);
+
+      const result = await service.adminStats();
+
+      expect(result).toEqual({
+        totalProfiles: 10,
+        activeProfiles: 6,
+        totalMatches: 3,
+        activeMatches: 2,
+        pendingReports: 1,
+        totalSwipes: 10,
+        totalLikes: 6,
+        matchRate: 0.5,
+      });
+    });
+
+    it('reports a 0 matchRate rather than dividing by zero when nobody has liked anything yet', async () => {
+      profileModel.countDocuments.mockResolvedValue(0);
+      matchModel.countDocuments.mockResolvedValue(0);
+      datingReportModel.countDocuments.mockResolvedValue(0);
+      swipeModel.aggregate.mockResolvedValue([]);
+
+      const result = await service.adminStats();
+
+      expect(result.matchRate).toBe(0);
+      expect(result.totalSwipes).toBe(0);
     });
   });
 });

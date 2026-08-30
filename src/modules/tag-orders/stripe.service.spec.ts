@@ -4,11 +4,13 @@ import { ConfigService } from '@nestjs/config';
 
 const createMock = jest.fn();
 const constructEventMock = jest.fn();
+const refundsCreateMock = jest.fn();
 
 jest.mock('stripe', () => {
   return jest.fn().mockImplementation(() => ({
     checkout: { sessions: { create: createMock } },
     webhooks: { constructEvent: constructEventMock },
+    refunds: { create: refundsCreateMock },
   }));
 });
 
@@ -125,6 +127,19 @@ describe('StripeService', () => {
           payment_intent: { id: 'pi_456' },
         } as never),
       ).toBe('pi_456');
+    });
+  });
+
+  describe('refundPayment', () => {
+    it('issues a full refund for the given payment intent', async () => {
+      refundsCreateMock.mockResolvedValue({ id: 're_123' });
+
+      const refund = await service.refundPayment('pi_123');
+
+      expect(refundsCreateMock).toHaveBeenCalledWith({
+        payment_intent: 'pi_123',
+      });
+      expect(refund.id).toBe('re_123');
     });
   });
 });

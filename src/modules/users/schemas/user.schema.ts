@@ -7,6 +7,18 @@ export type UserDocument = HydratedDocument<User>;
 
 @Schema({
   timestamps: true,
+  // Admin endpoints (list/block/unblock/verify/role/etc.) return the raw
+  // document, and the frontend's User type expects `id` — without this,
+  // JSON serialization only exposes Mongo's `_id`, so every admin action
+  // on a user silently operates on `undefined`.
+  toJSON: {
+    virtuals: true,
+    transform: (_doc, ret: Record<string, unknown>) => {
+      delete ret._id;
+      delete ret.__v;
+      return ret;
+    },
+  },
 })
 export class User {
   @Prop({

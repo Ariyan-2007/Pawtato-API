@@ -275,4 +275,11 @@ export class FoundReportsService {
 
     return { deletedCount: result.deletedCount };
   }
+
+  // Feeds the admin dashboard's moderation-queue widget.
+  async countPending(): Promise<number> {
+    return this.foundReportModel.countDocuments({
+      status: FoundReportStatus.PENDING,
+    });
+  }
 }

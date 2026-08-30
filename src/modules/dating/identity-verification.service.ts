@@ -290,4 +290,23 @@ export class IdentityVerificationService {
 
     return { deletedCount: 1 };
   }
+
+  // Feeds the admin dashboard's moderation-queue widget and the approval-rate
+  // analytics figure.
+  async countByStatus(): Promise<Record<IdentityVerificationStatus, number>> {
+    const rows = await this.verificationModel.aggregate<{
+      _id: IdentityVerificationStatus;
+      count: number;
+    }>([{ $group: { _id: '$status', count: { $sum: 1 } } }]);
+
+    const breakdown = Object.fromEntries(
+      Object.values(IdentityVerificationStatus).map((status) => [status, 0]),
+    ) as Record<IdentityVerificationStatus, number>;
+
+    for (const row of rows) {
+      breakdown[row._id] = row.count;
+    }
+
+    return breakdown;
+  }
 }

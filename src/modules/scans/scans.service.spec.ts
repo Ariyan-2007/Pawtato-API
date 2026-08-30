@@ -145,4 +145,26 @@ describe('ScansService', () => {
       expect(result).toEqual({ deletedCount: 0 });
     });
   });
+
+  describe('monthlyScanCounts', () => {
+    it('buckets this-year scan events by the calendar month they happened in', async () => {
+      const thisYear = new Date().getFullYear();
+      scanEventModel.find.mockReturnValue({
+        select: jest.fn().mockReturnThis(),
+        lean: jest
+          .fn()
+          .mockResolvedValue([
+            { createdAt: new Date(thisYear, 2, 1) },
+            { createdAt: new Date(thisYear, 2, 15) },
+            { createdAt: new Date(thisYear, 5, 1) },
+          ]),
+      });
+
+      const result = await service.monthlyScanCounts();
+
+      expect(result[2]).toBe(2);
+      expect(result[5]).toBe(1);
+      expect(result.reduce((a, b) => a + b, 0)).toBe(3);
+    });
+  });
 });

@@ -25,6 +25,7 @@ describe('TagsService', () => {
     findByIdAndDelete: jest.Mock;
     distinct: jest.Mock;
     deleteMany: jest.Mock;
+    aggregate: jest.Mock;
   };
   let petsService: { findOwnedPet: jest.Mock; findByIdAdmin: jest.Mock };
   let qrService: { generate: jest.Mock; delete: jest.Mock };
@@ -57,6 +58,7 @@ describe('TagsService', () => {
       findByIdAndDelete: jest.fn(),
       distinct: jest.fn(),
       deleteMany: jest.fn().mockResolvedValue({ deletedCount: 0 }),
+      aggregate: jest.fn(),
     };
     petsService = { findOwnedPet: jest.fn(), findByIdAdmin: jest.fn() };
     qrService = {
@@ -603,6 +605,25 @@ describe('TagsService', () => {
 
         expect(tagModel.deleteMany).toHaveBeenCalled();
         expect(result).toEqual({ deletedCount: 1 });
+      });
+    });
+  });
+
+  describe('statusBreakdown', () => {
+    it('fills in every TagStatus at 0, overridden by whatever the aggregation actually returns', async () => {
+      tagModel.aggregate.mockResolvedValue([
+        { _id: TagStatus.ASSIGNED, count: 4 },
+        { _id: TagStatus.AVAILABLE, count: 2 },
+      ]);
+
+      const result = await service.statusBreakdown();
+
+      expect(result).toEqual({
+        MANUFACTURED: 0,
+        AVAILABLE: 2,
+        ASSIGNED: 4,
+        SUSPENDED: 0,
+        RETIRED: 0,
       });
     });
   });

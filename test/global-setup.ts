@@ -20,4 +20,26 @@ export default async function globalSetup() {
   process.env.APP_URL ||= 'http://localhost:5000';
   process.env.FRONTEND_URL ||= 'http://localhost:3000';
   process.env.CORS_ORIGINS ||= '';
+
+  // Deliberately blanked to '', not deleted: ConfigModule's
+  // `envFilePath: '.env'` loads the real project .env unconditionally (not
+  // gated on NODE_ENV) *inside each test file's own AppModule compilation*
+  // — i.e. after this globalSetup has already run — and dotenv only skips a
+  // key it finds already present on `process.env` (`hasOwnProperty`, not a
+  // truthiness check). `delete` leaves the key absent, so dotenv happily
+  // reloads it straight from the real .env file the moment ConfigModule
+  // boots; an empty string is still "present" and blocks that reload. A
+  // developer's real optional provider credentials would otherwise leak
+  // into e2e runs and make "provider not configured" tests non-deterministic
+  // depending on what happens to be in their local .env — exactly what broke
+  // push-notifications.e2e-spec.ts's "reports null" test the first time a
+  // real VAPID_PUBLIC_KEY was added there. Specs that need these configured
+  // override the owning service via DI instead (StripeService,
+  // WebPushService) rather than relying on real env values, so blanking
+  // these costs no coverage.
+  process.env.VAPID_PUBLIC_KEY = '';
+  process.env.VAPID_PRIVATE_KEY = '';
+  process.env.VAPID_SUBJECT = '';
+  process.env.STRIPE_SECRET_KEY = '';
+  process.env.STRIPE_WEBHOOK_SECRET = '';
 }

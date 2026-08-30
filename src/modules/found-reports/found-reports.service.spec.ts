@@ -300,4 +300,17 @@ describe('FoundReportsService', () => {
       expect(result).toEqual({ deletedCount: 1 });
     });
   });
+
+  describe('countPending', () => {
+    it('counts only PENDING reports', async () => {
+      foundReportModel.countDocuments.mockResolvedValue(3);
+
+      const result = await service.countPending();
+
+      expect(foundReportModel.countDocuments).toHaveBeenCalledWith({
+        status: FoundReportStatus.PENDING,
+      });
+      expect(result).toBe(3);
+    });
+  });
 });

@@ -16,6 +16,7 @@ describe('CaretakersService', () => {
     find: jest.Mock;
     findOneAndDelete: jest.Mock;
     deleteMany: jest.Mock;
+    countDocuments: jest.Mock;
   };
   let petsService: { findOwnedPet: jest.Mock; findAccessiblePet: jest.Mock };
   let usersService: { findByEmailForLookup: jest.Mock };
@@ -31,6 +32,7 @@ describe('CaretakersService', () => {
       find: jest.fn(),
       findOneAndDelete: jest.fn(),
       deleteMany: jest.fn().mockResolvedValue({ deletedCount: 0 }),
+      countDocuments: jest.fn(),
     };
     petsService = {
       findOwnedPet: jest.fn().mockResolvedValue({ _id: petId }),
@@ -267,6 +269,15 @@ describe('CaretakersService', () => {
       expect(caretakerModel.deleteMany).toHaveBeenCalledWith({
         petId: { $in: [new Types.ObjectId(petId)] },
       });
+    });
+  });
+
+  describe('countAll', () => {
+    it('counts every caretaker grant platform-wide', async () => {
+      caretakerModel.countDocuments.mockResolvedValue(7);
+
+      await expect(service.countAll()).resolves.toBe(7);
+      expect(caretakerModel.countDocuments).toHaveBeenCalledWith();
     });
   });
 });

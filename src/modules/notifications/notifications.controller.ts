@@ -25,7 +25,10 @@ import { ParseMongoIdPipe } from '../../common/pipes/parse-mongo-id.pipe';
 import { NotificationQueryDto } from './dto/notification-query.dto';
 import { BulkDeleteNotificationsDto } from './dto/bulk-delete-notifications.dto';
 import { RegisterDeviceTokenDto } from './dto/register-device-token.dto';
-import { RegisterWebPushSubscriptionDto } from './dto/register-web-push-subscription.dto';
+import {
+  RegisterWebPushSubscriptionDto,
+  UnregisterWebPushSubscriptionQueryDto,
+} from './dto/register-web-push-subscription.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import type { JwtPayload } from '../auth/interfaces/jwt-payload.interface';
@@ -151,8 +154,13 @@ export class NotificationsController {
   })
   @Get('vapid-public-key')
   getVapidPublicKey() {
+    // `||`, not `??`: an empty string (unset-but-present env var, or a
+    // stray `VAPID_PUBLIC_KEY=` line) must report "not configured" the same
+    // as a genuinely absent one — handing a browser an empty
+    // applicationServerKey would just fail PushManager.subscribe() with a
+    // confusing error instead of the clear "not configured" signal here.
     return {
-      publicKey: this.configService.get<string>('vapid.publicKey') ?? null,
+      publicKey: this.configService.get<string>('vapid.publicKey') || null,
     };
   }
 
@@ -194,12 +202,12 @@ export class NotificationsController {
   unregisterWebPushSubscription(
     @CurrentUser() user: JwtPayload,
 
-    @Query('endpoint')
-    endpoint: string,
+    @Query()
+    query: UnregisterWebPushSubscriptionQueryDto,
   ) {
     return this.notificationsService.unregisterWebPushSubscription(
       user.sub,
-      endpoint,
+      query.endpoint,
     );
   }
 

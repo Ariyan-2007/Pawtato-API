@@ -112,6 +112,23 @@ export function renderNotification(
       };
     }
 
+    case DOMAIN_EVENTS.ADMIN_BROADCAST:
+      // Title/message are admin-authored content on the payload itself
+      // (AdminService.broadcast), not derived from a template string — this
+      // case exists purely to opt broadcasts into email+push the same way
+      // every other meaningful event type declares its channels here, one
+      // place, rather than as a special case elsewhere.
+      return {
+        title: typeof payload.title === 'string' ? payload.title : 'Pawtato',
+        message:
+          typeof payload.message === 'string'
+            ? payload.message
+            : 'You have a new announcement.',
+        sendEmail: true,
+        sendPush: true,
+        sendSms: false,
+      };
+
     default:
       return {
         title: 'Notification',

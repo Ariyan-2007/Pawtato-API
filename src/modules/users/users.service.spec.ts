@@ -9,7 +9,6 @@ jest.mock('bcrypt', () => ({
 
 import { UsersService } from './users.service';
 import { User } from './schemas/user.schema';
-import { Pet } from '../pets/schemas/pet.schema';
 import { AccountStatus } from '../../common/enums/account-status.enum';
 import { UserRole } from '../../common/enums/user-role.enum';
 import { STORAGE_PROVIDER } from '../storage/storage.constants';
@@ -43,7 +42,6 @@ describe('UsersService', () => {
       providers: [
         UsersService,
         { provide: getModelToken(User.name), useValue: userModel },
-        { provide: getModelToken(Pet.name), useValue: {} },
         { provide: STORAGE_PROVIDER, useValue: storageProvider },
       ],
     }).compile();
@@ -284,6 +282,44 @@ describe('UsersService', () => {
             { email: { $regex: 'sarah', $options: 'i' } },
           ],
         }),
+      );
+    });
+  });
+
+  describe('findActiveRecipients', () => {
+    it('returns only ACTIVE, non-blocked accounts, mapped to id/email/phone', async () => {
+      const chain = {
+        select: jest.fn().mockReturnThis(),
+        lean: jest.fn().mockResolvedValue([
+          { _id: 'user-1', email: 'sarah@example.com', phone: '+8801000000' },
+          { _id: 'user-2', email: 'ariyan@example.com', phone: '' },
+        ]),
+      };
+      userModel.find.mockReturnValue(chain);
+
+      const result = await service.findActiveRecipients();
+
+      expect(userModel.find).toHaveBeenCalledWith({
+        status: AccountStatus.ACTIVE,
+        isActive: true,
+      });
+      expect(result).toEqual([
+        { id: 'user-1', email: 'sarah@example.com', phone: '+8801000000' },
+        { id: 'user-2', email: 'ariyan@example.com', phone: undefined },
+      ]);
+    });
+
+    it('narrows to a single role when one is given', async () => {
+      const chain = {
+        select: jest.fn().mockReturnThis(),
+        lean: jest.fn().mockResolvedValue([]),
+      };
+      userModel.find.mockReturnValue(chain);
+
+      await service.findActiveRecipients(UserRole.ADMIN);
+
+      expect(userModel.find).toHaveBeenCalledWith(
+        expect.objectContaining({ role: UserRole.ADMIN }),
       );
     });
   });
