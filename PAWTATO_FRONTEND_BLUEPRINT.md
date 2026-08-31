@@ -34,6 +34,7 @@ This file was referenced by name back when Phase 10 was scoped (see `PAWTATO_ROA
 | Dating | Dating Hub / Matches List | **Phase 14**: unread chat-message badges (Dating tab, Match & Chats, per-conversation) now backed by a dedicated Dating Chat Notifications system — see Dating Chat Notifications section |
 | Other | Lost & Found, Auth, Pet CRUD, Admin dashboard | Not designed here — see note below (Pet Create/Edit gained a mandatory Gender field in Phase 12) |
 | Other | Pet Detail / Caretakers | **Phase 15**: shared pet access (caretakers) API now exists — no screens designed here yet, see Shared Pet Access section for the contract to build against |
+| Other | Marketing Landing Page | **Phase 21**: fully backend-driven — no screens designed here (this is a marketing page, not an app screen), see Dynamic Landing Page section for the full data-driven-render contract |
 
 **Other modules note:** Lost & Found, auth/onboarding, pet profile CRUD, QR/tag management, and the general admin dashboard all have working, e2e-verified API flows (`PAWTATO_FRONTEND_FLOWS.md` Flows 1–2), but no page-layout plan exists yet — out of scope for this pass, which was requested specifically to cover the dating module rework. Add a section here when those get designed.
 
@@ -890,6 +891,100 @@ GET /tag-orders/{id}          -- one order (owner or admin)
 
 ---
 
+## Dynamic Landing Page (Phase 21)
+
+New (backend-driven marketing landing page): the public marketing landing page is no longer hardcoded on the frontend — every section's visibility, order, and content is controlled from the backend. No screens are designed here (this is a marketing page, not an app screen), but the render contract below is the whole point of this feature, so it's documented in full.
+
+### The one rule for the frontend
+
+```
+GET /landing-page
+    ↓
+for each section in response.sections (already sorted, already filtered to enabled-only):
+    render(section.key, section.content)
+```
+
+The frontend should **not** re-implement any of: whether a section is enabled, what order sections appear in, or what title/copy/CTA a section shows. All three are backend state. The only thing the frontend owns is *how* to render each known `key` — i.e. one renderer component per section kind — and what to do if a `key` it doesn't recognize appears (recommended: skip it silently, so an admin can add a new kind server-side without an old client build crashing).
+
+### Public endpoint
+
+```
+GET /landing-page
+```
+
+No authentication. Returns only **enabled** sections, already sorted by `order` ascending — disabled sections are omitted entirely, not sent with `enabled: false`. Response (inside this API's normal `{ success, message, data }` envelope — see any other endpoint in this doc):
+
+```json
+{
+  "sections": [
+    {
+      "key": "hero",
+      "order": 1,
+      "content": {
+        "title": "Give Your Pet a Better Life",
+        "subtitle": "Digital ID tags for pets — scan, identify, reunite.",
+        "primaryCta": { "text": "Get Started", "url": "/signup" }
+      }
+    }
+  ]
+}
+```
+
+Every section object has exactly three keys — `key`, `order`, `content` — nothing admin-only (no `enabled` flag, no Mongo `_id`/timestamps) leaks into the public payload. On a fresh deployment with no admin edits yet, this still returns a valid, non-empty config (a sensible placeholder default is seeded automatically on first read) — it never 404s or returns null.
+
+### Section `key`s
+
+A closed, backend-defined set — treat this as an enum on the client, one renderer per value:
+
+```
+hero | features | how_it_works | stats | testimonials | faq | cta | promo
+```
+
+Adding a section is possible without a backend deploy (admin edits content/order/enabled on an *existing* key), but a genuinely new `key` value is a real, coordinated change on both sides — it's a rendering contract, not free-form text.
+
+### The `content` shape
+
+`content` is intentionally loosely-typed on the wire (it's whatever fields that section's kind uses), but every field the backend accepts is validated server-side against this shared set — a given section only populates the fields relevant to it:
+
+| Field | Shape | Used by (typically) |
+|---|---|---|
+| `title`, `subtitle`, `description` | strings | most sections |
+| `image`, `video` | URL strings | `hero`, `promo` |
+| `primaryCta`, `secondaryCta` | `{ text, url }` | `hero`, `cta` |
+| `items` | `[{ title, description?, icon?, image? }]` | `features`, `how_it_works` |
+| `stats` | `[{ label, value, icon? }]` | `stats` |
+| `testimonials` | `[{ name, role?, avatar?, quote, rating? }]` | `testimonials` |
+| `faqs` | `[{ question, answer }]` | `faq` |
+
+`primaryCta`/`secondaryCta`'s `url` may be a relative app route (`/signup`) or an absolute `http(s)://` URL — the frontend's CTA button should handle both (internal navigation vs. external link) rather than assuming one or the other.
+
+### Admin endpoints
+
+All three require an `ADMIN`-role bearer token (`JwtAuthGuard` + `RolesGuard`, same as every other route under `/admin`) — a non-admin gets `403`, an unauthenticated caller gets `401`.
+
+```
+GET /admin/landing-page
+```
+Every section, including disabled ones (each one carries `enabled: true|false`), sorted by `order` — this is what an admin "landing page settings" screen should load to populate its editor.
+
+```
+PUT /admin/landing-page
+{ "sections": [ { "key": "hero", "enabled": true, "order": 1, "content": { ... } }, ... ] }
+```
+Full replace — the entire `sections` array is provided and stored as-is. Covers content edits, reordering, enabling/disabling, and adding/removing sections in one call. Returns the updated full config (same shape as the `GET` above). `400` on: an unrecognized `key`, a duplicate `key`, two sections sharing the same `order`, or any `content` field failing its own validation (e.g. a CTA `url` that's neither a relative path nor an absolute URL, a `rating` outside 1–5, a string over its field's length cap).
+
+```
+PATCH /admin/landing-page/sections/{key}
+{ "enabled": false }
+```
+A focused toggle for the common "hide/show this section" action, without resending the whole configuration (and risking clobbering a concurrent edit to another section's content). `404` if no section with that `key` exists in the saved config yet — toggle only works on a section that's already been created via `PUT`.
+
+### What this does *not* add
+
+No page-builder/CMS (no arbitrary new field types, no drag-and-drop section authoring) and no separate `POST`/`DELETE` per-section endpoints — adding or removing a section is just re-sending the full array via `PUT` with one more/fewer entries. No media upload endpoint specific to this feature — `image`/`video`/`avatar` fields are plain URL strings, populated from whatever upload mechanism the rest of the app already uses for pet/profile photos.
+
+---
+
 ## Changelog
 
 - **2026-08-25** — File created (Phase 11). Full page-by-page layout plan for every Dating module screen, including the two new identity-verification screens (owner-facing submit/status) and the new admin verification queue. Other modules (Lost & Found, auth, pet CRUD, general admin dashboard) intentionally left undesigned here — out of scope for this pass.
@@ -900,3 +995,4 @@ GET /tag-orders/{id}          -- one order (owner or admin)
 - **2026-08-29** — Phase 16 (Expanded Medical Records — Document Attachments), catch-up entry (the section itself already existed but this changelog line was missed at the time). Medical records and vaccination records can each carry uploaded file attachments — `POST`/`DELETE .../medical-records/{recordId}/documents(/{documentId})` and the identical pair under `.../vaccinations/{vaccinationId}/documents`, multipart, image or PDF up to 10MB, same Phase 15 owner-or-caretaker access model. No signed-URL/audit machinery like dating's NID exchange — these aren't treated as identity-sensitive, just a normal public `url` per document embedded directly in the parent record's response. Full contract in "Expanded Medical Records — Document Attachments (Phase 16)" above.
 - **2026-08-29** — Phases 17 (Push & SMS Notification Channels), 18 (Nearby Lost-Pet Discovery), and 19 (QR Tag Ordering/Commerce), the last three scoped Phase 9 backlog items. Phase 17: `POST`/`DELETE /notifications/device-tokens` for push registration — real device-token storage today, but push/SMS *sending* is currently a stub (logs instead of calling FCM/APNs/Twilio), so don't expect an actual notification to arrive on a device yet. Phase 18: `GET /public/lost-pets/nearby?lat=&lng=&radiusKm=`, geo search over only the lost pets whose owner supplied coordinates on report-lost — a pet reported lost with just a text location won't appear here even though it still appears in the plain lost-pets listing. Phase 19: `POST /tag-orders` starts a real Stripe Checkout session (redirect the browser to the returned `checkoutUrl`); the order stays `PENDING_PAYMENT` until Stripe's webhook confirms payment asynchronously — poll `GET /tag-orders/{id}` after the redirect back rather than assuming success. No screens designed for any of the three yet — all three sections above document contract only. Full detail in the new "Push & SMS Notification Channels (Phase 17)", "Nearby Lost-Pet Discovery (Phase 18)", and "QR Tag Ordering/Commerce (Phase 19)" sections above.
 - **2026-08-30** — `PAWTATO_FRONTEND_FLOWS.md` (referenced by name in this file's own header since it was created, and by the Roadmap's Phase 11 log entry, but never actually written) now exists — Phase 20's admin-dashboard/auth-refresh work. It covers every non-Dating module's API flow end-to-end and a full new Admin Dashboard section (dashboard/analytics response shapes, the new broadcast-announcement and tag-order-cancel endpoints); for Dating it points back here rather than duplicating this file's screen-level detail. Also relevant to any screen built against `POST /auth/login`/`verify-otp`: both now return a `refreshToken` alongside `accessToken` (additive), and a new `POST /auth/refresh` exists to exchange it for a fresh pair without forcing a full re-login — see the Flows file's Auth section for the recommended client-side retry pattern.
+- **2026-08-31** — Phase 21 (Dynamic Landing Page), first backend-driven-content feature documented in this file. The public marketing landing page is no longer hardcoded: `GET /landing-page` (no auth) returns only enabled sections, already sorted by `order`, each with a fixed `{ key, order, content }` shape — the frontend's only job is one renderer per known `key` (`hero | features | how_it_works | stats | testimonials | faq | cta | promo`), with no client-side logic for visibility, ordering, or copy. Admin management lives under `/admin` like every other admin surface in this API (`ADMIN`-role bearer token, `403`/`401` otherwise): `GET /admin/landing-page` (full config incl. disabled sections), `PUT /admin/landing-page` (full replace — content edits, reordering, add/remove, enable/disable all in one call; `400` on duplicate keys/orders or invalid content), and `PATCH /admin/landing-page/sections/{key}` (a focused enable/disable toggle that doesn't require resending the whole payload; `404` if that key was never saved). A fresh deployment auto-seeds a minimal default config on first read, so `GET /landing-page` is never empty/null out of the box. No screens designed here (it's a marketing page, not an app screen) — full contract in the new "Dynamic Landing Page (Phase 21)" section above the Changelog.

@@ -6,6 +6,7 @@ import {
   Param,
   Patch,
   Post,
+  Put,
   Query,
   UseGuards,
 } from '@nestjs/common';
@@ -40,6 +41,8 @@ import { DashboardAnalyticsDto } from './dto/dashboard-analytics.dto';
 import { AdminTagOrderQueryDto } from '../tag-orders/dto/admin-tag-order-query.dto';
 import { ShipTagOrderDto } from '../tag-orders/dto/ship-tag-order.dto';
 import { BroadcastNotificationDto } from './dto/broadcast-notification.dto';
+import { UpdateLandingPageDto } from '../landing-page/dto/update-landing-page.dto';
+import { ToggleSectionDto } from '../landing-page/dto/toggle-section.dto';
 
 @ApiTags('Admin')
 @ApiBearerAuth('JWT-auth')
@@ -501,5 +504,67 @@ export class AdminController {
     dto: BroadcastNotificationDto,
   ) {
     return this.adminService.broadcast(user.sub, dto);
+  }
+
+  @ApiOperation({
+    summary:
+      'Get the full landing-page configuration, incl. disabled sections (admin only)',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Every landing-page section, sorted by order.',
+  })
+  @Get('landing-page')
+  getLandingPage() {
+    return this.adminService.landingPage();
+  }
+
+  @ApiOperation({
+    summary: 'Replace the landing-page configuration (admin only)',
+    description:
+      'Full replace of the sections array — covers content edits, reordering, adding/removing ' +
+      'sections, and enable/disable, all in one call. Rejects duplicate section keys or duplicate ' +
+      'order values.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Landing-page configuration updated.',
+  })
+  @ApiResponse({
+    status: 400,
+    description:
+      'Validation failed (bad shape, duplicate key, or duplicate order).',
+  })
+  @Put('landing-page')
+  updateLandingPage(
+    @CurrentUser() user: JwtPayload,
+
+    @Body()
+    dto: UpdateLandingPageDto,
+  ) {
+    return this.adminService.updateLandingPage(user.sub, dto);
+  }
+
+  @ApiOperation({
+    summary: 'Enable or disable a single landing-page section (admin only)',
+    description:
+      'A focused toggle for the common case of hiding/showing one section, without resending ' +
+      "the full configuration payload. Use PUT /admin/landing-page to change a section's content " +
+      'or order.',
+  })
+  @ApiParam({ name: 'key', description: 'Section key, e.g. "hero"' })
+  @ApiResponse({ status: 200, description: 'Section enabled state updated.' })
+  @ApiResponse({ status: 404, description: 'No section with this key.' })
+  @Patch('landing-page/sections/:key')
+  setLandingPageSectionEnabled(
+    @CurrentUser() user: JwtPayload,
+
+    @Param('key')
+    key: string,
+
+    @Body()
+    dto: ToggleSectionDto,
+  ) {
+    return this.adminService.setLandingPageSectionEnabled(user.sub, key, dto);
   }
 }

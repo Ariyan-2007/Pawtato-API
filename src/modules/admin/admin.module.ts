@@ -15,6 +15,7 @@ import { ActivityModule } from '../activity/activity.module';
 import { DatingModule } from '../dating/dating.module';
 import { CaretakersModule } from '../caretakers/caretakers.module';
 import { TagOrdersModule } from '../tag-orders/tag-orders.module';
+import { LandingPageModule } from '../landing-page/landing-page.module';
 
 @Module({
   imports: [
@@ -30,6 +31,7 @@ import { TagOrdersModule } from '../tag-orders/tag-orders.module';
     DatingModule,
     CaretakersModule,
     TagOrdersModule,
+    LandingPageModule,
   ],
   controllers: [AdminController],
   providers: [AdminService],
