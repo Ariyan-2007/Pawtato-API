@@ -141,7 +141,9 @@ describe('Landing page (e2e)', () => {
   });
 
   it('rejects unauthenticated access to the admin config endpoint', async () => {
-    await request(app.getHttpServer()).get('/api/admin/landing-page').expect(401);
+    await request(app.getHttpServer())
+      .get('/api/admin/landing-page')
+      .expect(401);
   });
 
   it('rejects a non-admin from reading the admin config endpoint', async () => {
