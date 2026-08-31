@@ -15,6 +15,8 @@ import { IdentityVerificationService } from '../dating/identity-verification.ser
 import { CaretakersService } from '../caretakers/caretakers.service';
 import { TagOrdersService } from '../tag-orders/tag-orders.service';
 import { ActivityService } from '../activity/activity.service';
+import { LandingPageService } from '../landing-page/landing-page.service';
+import { LandingPageSectionKey } from '../../common/enums/landing-page-section-key.enum';
 import { TagOrderStatus } from '../../common/enums/tag-order-status.enum';
 import { UserRole } from '../../common/enums/user-role.enum';
 import { FoundReportStatus } from '../../common/enums/found-report-status.enum';
@@ -95,6 +97,11 @@ describe('AdminService', () => {
   };
   let activityService: { log: jest.Mock };
   let eventEmitter: { emit: jest.Mock };
+  let landingPageService: {
+    getAdminConfig: jest.Mock;
+    replaceSections: jest.Mock;
+    setSectionEnabled: jest.Mock;
+  };
 
   const actorId = 'admin-1';
 
@@ -221,6 +228,11 @@ describe('AdminService', () => {
     };
     activityService = { log: jest.fn().mockResolvedValue(undefined) };
     eventEmitter = { emit: jest.fn() };
+    landingPageService = {
+      getAdminConfig: jest.fn().mockResolvedValue({ sections: [] }),
+      replaceSections: jest.fn().mockResolvedValue({ sections: [] }),
+      setSectionEnabled: jest.fn().mockResolvedValue({ sections: [] }),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -242,6 +254,7 @@ describe('AdminService', () => {
         { provide: TagOrdersService, useValue: tagOrdersService },
         { provide: ActivityService, useValue: activityService },
         { provide: EventEmitter2, useValue: eventEmitter },
+        { provide: LandingPageService, useValue: landingPageService },
       ],
     }).compile();
 
@@ -358,6 +371,76 @@ describe('AdminService', () => {
 
       expect(usersService.findActiveRecipients).toHaveBeenCalledWith(
         UserRole.ADMIN,
+      );
+    });
+  });
+
+  describe('landingPage', () => {
+    it('delegates straight through to LandingPageService', async () => {
+      const config = { sections: [{ key: LandingPageSectionKey.HERO }] };
+      landingPageService.getAdminConfig.mockResolvedValue(config);
+
+      const result = await service.landingPage();
+
+      expect(landingPageService.getAdminConfig).toHaveBeenCalled();
+      expect(result).toBe(config);
+    });
+  });
+
+  describe('updateLandingPage', () => {
+    it('replaces the sections and logs a single audit entry', async () => {
+      const dto = {
+        sections: [
+          {
+            key: LandingPageSectionKey.HERO,
+            enabled: true,
+            order: 1,
+            content: {},
+          },
+        ],
+      };
+      const updated = { sections: dto.sections };
+      landingPageService.replaceSections.mockResolvedValue(updated);
+
+      const result = await service.updateLandingPage(actorId, dto);
+
+      expect(landingPageService.replaceSections).toHaveBeenCalledWith(dto);
+      expect(activityService.log).toHaveBeenCalledWith(
+        actorId,
+        'admin.landing-page.updated',
+        actorId,
+        { sectionCount: 1 },
+      );
+      expect(result).toBe(updated);
+    });
+  });
+
+  describe('setLandingPageSectionEnabled', () => {
+    it('toggles a section and logs an enabled audit entry', async () => {
+      await service.setLandingPageSectionEnabled(actorId, 'hero', {
+        enabled: true,
+      });
+
+      expect(landingPageService.setSectionEnabled).toHaveBeenCalledWith(
+        'hero',
+        true,
+      );
+      expect(activityService.log).toHaveBeenCalledWith(
+        actorId,
+        'admin.landing-page.section-enabled',
+        'hero',
+      );
+    });
+
+    it('logs a disabled audit entry when turning a section off', async () => {
+      await service.setLandingPageSectionEnabled(actorId, 'hero', {
+        enabled: false,
+      });
+
+      expect(activityService.log).toHaveBeenCalledWith(
+        actorId,
+        'admin.landing-page.section-disabled',
+        'hero',
       );
     });
   });

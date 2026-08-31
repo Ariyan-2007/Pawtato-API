@@ -30,6 +30,9 @@ import type { AdminTagOrderQueryDto } from '../tag-orders/dto/admin-tag-order-qu
 import type { ShipTagOrderDto } from '../tag-orders/dto/ship-tag-order.dto';
 import type { BroadcastNotificationDto } from './dto/broadcast-notification.dto';
 import { DOMAIN_EVENTS } from '../../common/events/domain-events';
+import { LandingPageService } from '../landing-page/landing-page.service';
+import type { UpdateLandingPageDto } from '../landing-page/dto/update-landing-page.dto';
+import type { ToggleSectionDto } from '../landing-page/dto/toggle-section.dto';
 
 @Injectable()
 export class AdminService {
@@ -48,6 +51,7 @@ export class AdminService {
     private readonly tagOrdersService: TagOrdersService,
     private readonly activityService: ActivityService,
     private readonly eventEmitter: EventEmitter2,
+    private readonly landingPageService: LandingPageService,
   ) {}
 
   async dashboard(): Promise<DashboardStatsDto> {
@@ -468,5 +472,43 @@ export class AdminService {
     );
 
     return { recipientCount: recipients.length };
+  }
+
+  async landingPage() {
+    return this.landingPageService.getAdminConfig();
+  }
+
+  async updateLandingPage(actorId: string, dto: UpdateLandingPageDto) {
+    const doc = await this.landingPageService.replaceSections(dto);
+
+    await this.activityService.log(
+      actorId,
+      'admin.landing-page.updated',
+      actorId,
+      { sectionCount: dto.sections.length },
+    );
+
+    return doc;
+  }
+
+  async setLandingPageSectionEnabled(
+    actorId: string,
+    key: string,
+    dto: ToggleSectionDto,
+  ) {
+    const doc = await this.landingPageService.setSectionEnabled(
+      key,
+      dto.enabled,
+    );
+
+    await this.activityService.log(
+      actorId,
+      dto.enabled
+        ? 'admin.landing-page.section-enabled'
+        : 'admin.landing-page.section-disabled',
+      key,
+    );
+
+    return doc;
   }
 }

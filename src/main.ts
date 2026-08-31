@@ -111,6 +111,10 @@ async function bootstrap() {
       'Tag Orders',
       'Order physical QR tags via Stripe Checkout; admin fulfillment/shipping',
     )
+    .addTag(
+      'Landing Page',
+      'Backend-driven landing-page content/configuration; admin management lives under Admin',
+    )
     .build();
 
   const document = SwaggerModule.createDocument(app, swaggerConfig);
