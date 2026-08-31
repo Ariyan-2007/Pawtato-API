@@ -5,6 +5,11 @@ import { PetsController } from './pets.controller';
 import { PetsService } from './pets.service';
 
 import { Pet, PetSchema } from './schemas/pet.schema';
+import {
+  PetCaretaker,
+  PetCaretakerSchema,
+} from '../caretakers/schemas/pet-caretaker.schema';
+import { ActivityModule } from '../activity/activity.module';
 
 @Module({
   imports: [
@@ -13,16 +18,23 @@ import { Pet, PetSchema } from './schemas/pet.schema';
         name: Pet.name,
         schema: PetSchema,
       },
+      // Read-only here — see PetsService.findAccessiblePet(). Registered
+      // locally (not via a CaretakersModule import) to avoid a real
+      // circular dependency: CaretakersModule needs PetsService for its own
+      // ownership checks.
+      {
+        name: PetCaretaker.name,
+        schema: PetCaretakerSchema,
+      },
     ]),
+
+    ActivityModule,
   ],
 
   controllers: [PetsController],
 
   providers: [PetsService],
 
-  exports: [
-    MongooseModule,
-    PetsService,
-  ],
+  exports: [MongooseModule, PetsService],
 })
 export class PetsModule {}

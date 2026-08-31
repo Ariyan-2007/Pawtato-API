@@ -1,8 +1,12 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Types } from 'mongoose';
 
-export type VaccinationDocument =
-  HydratedDocument<Vaccination>;
+import {
+  AttachedDocument,
+  AttachedDocumentSchema,
+} from '../../../common/schemas/attached-document.schema';
+
+export type VaccinationDocument = HydratedDocument<Vaccination>;
 
 @Schema({
   timestamps: true,
@@ -12,11 +16,12 @@ export class Vaccination {
     type: Types.ObjectId,
     ref: 'Pet',
     required: true,
-    })
-   pet!: Types.ObjectId;
+    index: true,
+  })
+  pet!: Types.ObjectId;
   @Prop({
     default: false,
-   })
+  })
   reminderSent!: boolean;
 
   @Prop()
@@ -45,7 +50,16 @@ export class Vaccination {
 
   @Prop()
   notes?: string;
+
+  // Phase 16 — attached certificates (e.g. the physical rabies certificate,
+  // scanned). Managed only through VaccinationsService.addDocument()/
+  // removeDocument(), same pattern as MedicalRecord.documents.
+  @Prop({ type: [AttachedDocumentSchema], default: [] })
+  documents!: AttachedDocument[];
 }
 
-export const VaccinationSchema =
-  SchemaFactory.createForClass(Vaccination);
+export const VaccinationSchema = SchemaFactory.createForClass(Vaccination);
+
+// Backs VaccinationReminderJob's daily sweep:
+// `{ reminderSent: false, nextDueDate: { $gte, $lte } }`.
+VaccinationSchema.index({ reminderSent: 1, nextDueDate: 1 });

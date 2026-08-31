@@ -27,9 +27,6 @@ import { PetsModule } from '../pets/pets.module';
 
   providers: [MedicalService],
 
-  exports: [
-    MedicalService,
-    MongooseModule,
-  ],
+  exports: [MedicalService, MongooseModule],
 })
 export class MedicalModule {}

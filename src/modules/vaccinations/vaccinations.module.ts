@@ -4,10 +4,7 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { VaccinationsController } from './vaccinations.controller';
 import { VaccinationsService } from './vaccinations.service';
 
-import {
-  Vaccination,
-  VaccinationSchema,
-} from './schemas/vaccination.schema';
+import { Vaccination, VaccinationSchema } from './schemas/vaccination.schema';
 
 import { PetsModule } from '../pets/pets.module';
 
@@ -23,17 +20,10 @@ import { PetsModule } from '../pets/pets.module';
     ]),
   ],
 
-  controllers: [
-    VaccinationsController,
-  ],
+  controllers: [VaccinationsController],
 
-  providers: [
-    VaccinationsService,
-  ],
+  providers: [VaccinationsService],
 
-  exports: [
-    VaccinationsService,  
-    MongooseModule,
-  ],
+  exports: [VaccinationsService, MongooseModule],
 })
 export class VaccinationsModule {}
