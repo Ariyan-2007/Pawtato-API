@@ -28,6 +28,7 @@ import { StorageModule } from './modules/storage/storage.module';
 import { DatingModule } from './modules/dating/dating.module';
 import { CaretakersModule } from './modules/caretakers/caretakers.module';
 import { TagOrdersModule } from './modules/tag-orders/tag-orders.module';
+import { LandingPageModule } from './modules/landing-page/landing-page.module';
 
 @Module({
   imports: [
@@ -132,6 +133,8 @@ import { TagOrdersModule } from './modules/tag-orders/tag-orders.module';
     CaretakersModule,
 
     TagOrdersModule,
+
+    LandingPageModule,
   ],
   providers: [
     {
