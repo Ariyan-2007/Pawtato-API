@@ -1,5 +1,6 @@
 import { NotFoundException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
+import { ConfigService } from '@nestjs/config';
 import { MailerService } from '@nestjs-modules/mailer';
 import { getModelToken } from '@nestjs/mongoose';
 import { Types } from 'mongoose';
@@ -54,6 +55,10 @@ describe('NotificationsService', () => {
         NotificationsService,
         { provide: MailerService, useValue: mailerService },
         {
+          provide: ConfigService,
+          useValue: { get: () => 'Pawtato <no-reply@pawtato.app>' },
+        },
+        {
           provide: getModelToken(Notification.name),
           useValue: notificationModel,
         },
@@ -72,11 +77,20 @@ describe('NotificationsService', () => {
   });
 
   describe('sendEmail', () => {
-    it('sends a plain HTML email via the mailer', async () => {
+    it('renders the shared branded "notification" template via the mailer', async () => {
       await service.sendEmail('to@example.com', 'Subject', 'Body text');
 
       expect(mailerService.sendMail).toHaveBeenCalledWith(
-        expect.objectContaining({ to: 'to@example.com', subject: 'Subject' }),
+        expect.objectContaining({
+          to: 'to@example.com',
+          subject: 'Subject',
+          template: 'notification',
+          context: {
+            title: 'Subject',
+            message: 'Body text',
+            supportEmail: 'no-reply@pawtato.app',
+          },
+        }),
       );
     });
   });

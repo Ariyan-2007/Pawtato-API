@@ -320,13 +320,16 @@ export class AuthService {
   }
 
   // Verifies a previously issued refresh token and mints a brand-new
-  // access+refresh pair (rotation) rather than just a fresh access token —
-  // there's no server-side refresh-token store in this codebase (same
-  // stateless-JWT design JwtStrategy already documents), so rotation is the
-  // only way an old refresh token stops being useful once a newer one has
-  // been issued from it, without needing a revocation list.
+  // access+refresh pair (rotation) rather than just a fresh access token.
+  // Real single-use rotation needs *some* server-side state even for an
+  // otherwise-stateless JWT — that's User.refreshTokenVersion: the token
+  // used here must carry the version currently stored on the user, and a
+  // successful refresh bumps it before minting the next pair, so the token
+  // just exchanged (and any other still-outstanding refresh token) no
+  // longer verifies against the new version. No separate revocation-list
+  // table needed, same idea as the existing passwordChangedAt check below.
   async refresh(dto: RefreshTokenDto) {
-    let payload: JwtPayload & { type?: string };
+    let payload: JwtPayload & { type?: string; tokenVersion?: number };
 
     try {
       payload = await this.jwtService.verifyAsync(dto.refreshToken, {
@@ -344,17 +347,22 @@ export class AuthService {
 
     // Same liveness checks JwtStrategy applies to an access token — a
     // refresh token minted before a block/deactivation/password-change
-    // must not be able to mint a fresh access token either.
+    // must not be able to mint a fresh access token either — plus the
+    // version check that makes rotation actually single-use.
     if (
       !user ||
       !user.isActive ||
       user.status !== AccountStatus.ACTIVE ||
+      payload.tokenVersion !== user.refreshTokenVersion ||
       (user.passwordChangedAt &&
         payload.iat !== undefined &&
         payload.iat * 1000 < user.passwordChangedAt.getTime())
     ) {
       throw new UnauthorizedException(INVALID_REFRESH_TOKEN_MESSAGE);
     }
+
+    user.refreshTokenVersion += 1;
+    await user.save();
 
     return this.buildAuthResponse(user);
   }
@@ -369,7 +377,11 @@ export class AuthService {
     const [accessToken, refreshToken] = await Promise.all([
       this.jwtService.signAsync(payload),
       this.jwtService.signAsync(
-        { ...payload, type: REFRESH_TOKEN_TYPE },
+        {
+          ...payload,
+          type: REFRESH_TOKEN_TYPE,
+          tokenVersion: user.refreshTokenVersion,
+        },
         {
           secret: this.configService.getOrThrow<string>('jwt.refreshSecret'),
           // env-driven value, can't satisfy @nestjs/jwt's StringValue

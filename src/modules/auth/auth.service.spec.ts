@@ -43,6 +43,8 @@ describe('AuthService', () => {
       otpExpiresAt: undefined,
       otpAttempts: 0,
       otpLastSentAt: undefined,
+      refreshTokenVersion: 0,
+      save: jest.fn().mockResolvedValue(undefined),
       ...overrides,
     };
   }
@@ -418,23 +420,29 @@ describe('AuthService', () => {
   });
 
   describe('refresh', () => {
-    it('rotates a valid refresh token into a new access+refresh pair', async () => {
+    it('rotates a valid refresh token into a new access+refresh pair, and bumps refreshTokenVersion so the old one stops verifying', async () => {
       jwtService.verifyAsync.mockResolvedValue({
         sub: 'user-1',
         email: 'sarah@example.com',
         role: 'USER',
         type: 'refresh',
+        tokenVersion: 0,
         iat: Math.floor(Date.now() / 1000),
       });
-      usersService.findById.mockResolvedValue(
-        makeUser({ status: AccountStatus.ACTIVE }),
-      );
+      const user = makeUser({ status: AccountStatus.ACTIVE });
+      usersService.findById.mockResolvedValue(user);
 
       const result = await service.refresh({ refreshToken: 'old-refresh' });
 
       expect(jwtService.verifyAsync).toHaveBeenCalledWith('old-refresh', {
         secret: 'refresh-secret',
       });
+      expect(user.refreshTokenVersion).toBe(1);
+      expect(user.save).toHaveBeenCalledTimes(1);
+      expect(jwtService.signAsync).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'refresh', tokenVersion: 1 }),
+        expect.any(Object),
+      );
       expect(result).toEqual(
         expect.objectContaining({
           accessToken: 'signed-jwt',
@@ -469,6 +477,7 @@ describe('AuthService', () => {
       jwtService.verifyAsync.mockResolvedValue({
         sub: 'user-1',
         type: 'refresh',
+        tokenVersion: 0,
       });
       usersService.findById.mockResolvedValue(null);
 
@@ -481,6 +490,7 @@ describe('AuthService', () => {
       jwtService.verifyAsync.mockResolvedValue({
         sub: 'user-1',
         type: 'refresh',
+        tokenVersion: 0,
       });
       usersService.findById.mockResolvedValue(
         makeUser({ status: AccountStatus.ACTIVE, isActive: false }),
@@ -495,6 +505,7 @@ describe('AuthService', () => {
       jwtService.verifyAsync.mockResolvedValue({
         sub: 'user-1',
         type: 'refresh',
+        tokenVersion: 0,
         iat: Math.floor(Date.now() / 1000) - 3600,
       });
       usersService.findById.mockResolvedValue(
@@ -506,6 +517,23 @@ describe('AuthService', () => {
 
       await expect(
         service.refresh({ refreshToken: 'old-refresh' }),
+      ).rejects.toThrow(UnauthorizedException);
+    });
+
+    it('rejects a stale tokenVersion — reusing a refresh token after it was already rotated away', async () => {
+      jwtService.verifyAsync.mockResolvedValue({
+        sub: 'user-1',
+        type: 'refresh',
+        tokenVersion: 0,
+      });
+      // The stored version has already moved on to 1 (a prior refresh call
+      // rotated it) — this token, still carrying version 0, must not verify.
+      usersService.findById.mockResolvedValue(
+        makeUser({ status: AccountStatus.ACTIVE, refreshTokenVersion: 1 }),
+      );
+
+      await expect(
+        service.refresh({ refreshToken: 'already-used-refresh' }),
       ).rejects.toThrow(UnauthorizedException);
     });
   });
