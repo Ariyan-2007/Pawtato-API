@@ -59,6 +59,13 @@ import { VaccinationsModule } from '../vaccinations/vaccinations.module';
             strict: true,
           },
         },
+        // Every named template (forgot-password, password-reset, verify-otp,
+        // notification) is a body-only fragment rendered inside this shared
+        // page shell (Pawtato wordmark, card, footer) — one place to keep the
+        // branded look consistent instead of duplicating it per template.
+        options: {
+          layout: 'layout',
+        },
       }),
     }),
   ],

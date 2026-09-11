@@ -121,6 +121,14 @@ export class User {
   // signed out" claim actually true despite JWTs otherwise being stateless.
   @Prop()
   passwordChangedAt?: Date;
+
+  // Embedded in every refresh token's payload and bumped on each successful
+  // POST /auth/refresh — this is the one piece of server-side state a
+  // refresh token needs to make rotation real (a refresh token carrying a
+  // stale version is rejected, see AuthService.refresh()), without needing
+  // a full revocation-list table for something that's otherwise stateless.
+  @Prop({ default: 0 })
+  refreshTokenVersion!: number;
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);

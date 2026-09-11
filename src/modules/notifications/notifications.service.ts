@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
 import { MailerService } from '@nestjs-modules/mailer';
 import { Model, Types } from 'mongoose';
@@ -16,6 +17,7 @@ import { RegisterDeviceTokenDto } from './dto/register-device-token.dto';
 import { RegisterWebPushSubscriptionDto } from './dto/register-web-push-subscription.dto';
 import { DevicePlatform } from '../../common/enums/device-platform.enum';
 import { renderPlainTextTemplate } from '../../mail/mail-template.util';
+import { extractEmailAddress } from '../../mail/mail-address.util';
 import { NotificationPriority } from './enums/notification-priority.enum';
 import {
   resolveExpiresAt,
@@ -26,6 +28,7 @@ import {
 export class NotificationsService {
   constructor(
     private readonly mailerService: MailerService,
+    private readonly configService: ConfigService,
 
     @InjectModel(Notification.name)
     private readonly notificationModel: Model<NotificationDocument>,
@@ -34,24 +37,16 @@ export class NotificationsService {
     private readonly deviceTokenModel: Model<DeviceTokenDocument>,
   ) {}
 
+  // Every domain-event-driven email (pet marked lost/found, a found report,
+  // a vaccination reminder, an admin broadcast — see EmailChannel, the sole
+  // caller) goes through the same branded "notification" template as the
+  // auth flows below, rather than a bare unstyled string.
   async sendEmail(to: string, subject: string, message: string) {
-    await this.mailerService.sendMail({
-      to,
-      subject,
-      html: `
-        <h2>${subject}</h2>
-
-        <p>${message}</p>
-
-        <hr>
-
-        <small>
-          Pawtato Pet Management System
-        </small>
-      `,
+    return this.sendTemplateEmail(to, subject, 'notification', {
+      title: subject,
+      message,
+      supportEmail: this.supportEmail,
     });
-
-    return true;
   }
 
   // Renders a named .hbs template (via MailerModule's HandlebarsAdapter) for
@@ -280,5 +275,11 @@ export class NotificationsService {
   // for the same stale subscription shouldn't error).
   async removeDeviceTokenByEndpoint(endpoint: string) {
     await this.deviceTokenModel.deleteOne({ endpoint });
+  }
+
+  private get supportEmail(): string {
+    return extractEmailAddress(
+      this.configService.get<string>('mail.from', 'hello@pawtato.app'),
+    );
   }
 }
